@@ -1,0 +1,36 @@
+# Quartus Prime generated directories
+db/
+incremental_db/
+output_files/
+simulation/
+
+# Auto-generated Quartus project files
+*.qpf
+*.qsf
+*.qws
+
+# Quartus temporary/backups
+*.bak
+
+# Questa/ModelSim generated artifacts
+work/
+transcript
+vsim.wlf
+modelsim.ini
+*.wlf
+*.vcd
+*_nativelink_simulation.rpt
+
+# Firmware build artifacts
+firmware/*.elf
+firmware/*.bin
+firmware/*.hex
+firmware/*.map
+firmware/*.lst
+firmware/*.o
+firmware/*.d
+
+# Editor/OS noise
+.DS_Store
+Thumbs.db
+*~
