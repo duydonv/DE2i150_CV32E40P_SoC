@@ -32,7 +32,8 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 #(
   parameter COREV_CLUSTER = 0,
   parameter COREV_PULP    = 0,
-  parameter FPU           = 0
+  parameter FPU           = 0,
+  parameter FPGA_TIMING_MODE = 0
 )
 (
   input  logic        clk,                        // Gated clock
@@ -242,7 +243,11 @@ module cv32e40p_controller import cv32e40p_pkg::*;
 
   // qualify wfi vs nosleep locally 
   logic wfi_active;
+  logic fpga_timing_stall;
 
+  assign fpga_timing_stall = (FPGA_TIMING_MODE != 0) && regfile_alu_we_fw_i &&
+                             (reg_d_alu_is_reg_a_i || reg_d_alu_is_reg_b_i ||
+                              reg_d_alu_is_reg_c_i);
 
   ////////////////////////////////////////////////////////////////////////////////////////////
   //   ____ ___  ____  _____    ____ ___  _   _ _____ ____   ___  _     _     _____ ____    //
@@ -1361,6 +1366,15 @@ endgenerate
       load_stall_o    = 1'b1;
     end
 
+    // FPGA timing mode: avoid the long EX-result -> ID-forwarding -> ID/EX
+    // operand path by inserting one bubble for direct ALU/MUL producer-consumer
+    // dependencies. The dependent instruction is held in ID and rereads the
+    // register file on the next cycle.
+    if (fpga_timing_stall) begin
+      deassert_we_o = 1'b1;
+      load_stall_o  = 1'b1;
+    end
+
     // Stall because of jr path
     // - always stall if a result is to be forwarded to the PC
     // we don't care about in which state the ctrl_fsm is as we deassert_we
@@ -1409,7 +1423,7 @@ endgenerate
     end
 
     // Forwarding EX -> ID
-    if (regfile_alu_we_fw_i == 1'b1)
+    if ((FPGA_TIMING_MODE == 0) && (regfile_alu_we_fw_i == 1'b1))
     begin
      if (reg_d_alu_is_reg_a_i == 1'b1)
        operand_a_fw_mux_sel_o = SEL_FW_EX;
