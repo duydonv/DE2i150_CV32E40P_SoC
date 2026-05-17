@@ -3,9 +3,10 @@ CROSS ?= riscv64-unknown-elf-
 CC      := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 
-# CV32E40P implements RV32IMC; use this exact march so the compiler can
-# emit compressed instructions + M-extension (mul/div) freely.
-ARCH_FLAGS := -march=rv32imc -mabi=ilp32
+# Keep the smoke firmware word-aligned. CV32E40P supports compressed
+# instructions, but the hardware-loop controller compares aligned 32-bit PCs,
+# so this bring-up test is built without C-extension instructions.
+ARCH_FLAGS := -march=rv32im -mabi=ilp32
 CFLAGS     := -Os -ffreestanding -nostdlib -Wall -Wextra $(ARCH_FLAGS)
 LDFLAGS    := -Wl,--build-id=none,-Bstatic,-T,sections.lds,--strip-debug
 
@@ -13,7 +14,7 @@ LDFLAGS    := -Wl,--build-id=none,-Bstatic,-T,sections.lds,--strip-debug
 
 all: firmware.hex firmware_byte0.hex firmware_byte1.hex firmware_byte2.hex firmware_byte3.hex
 
-firmware.elf: start.s main.c sections.lds
+firmware.elf: start.s main.c ai_ops.h sections.lds
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ start.s main.c
 
 firmware.bin: firmware.elf
