@@ -11,6 +11,8 @@ they can be trusted without re-checking the board schematic.
 | --- | --- | --- | --- |
 | `clock_50` | `CLOCK_50` | `PIN_AJ16` | `3.3-V LVTTL` |
 | `reset_n` | `KEY0` | `PIN_AA26` | `2.5-V` |
+| `uart_tx` | `UART_TXD` | `PIN_H24` | `3.3-V LVTTL` |
+| `uart_rx` | `UART_RXD` | `PIN_B27` | `3.3-V LVTTL` |
 | `ledr[0]` | `LEDR0` | `PIN_T23` | `2.5-V` |
 | `ledr[1]` | `LEDR1` | `PIN_T24` | `2.5-V` |
 | `ledr[2]` | `LEDR2` | `PIN_V27` | `2.5-V` |
@@ -34,15 +36,18 @@ they can be trusted without re-checking the board schematic.
 
 ## Notes
 
-- Bring-up firmware drives only `ledr[7:0]`. `ledr[17:8]` are tied low in RTL,
+- Benchmark firmware drives only `ledr[7:0]`. `ledr[17:8]` are tied low in RTL,
   so they must still be assigned to valid pins with a valid I/O standard —
   otherwise Quartus will refuse to place the design.
+- `uart_tx`/`uart_rx` use the on-board RS-232 transceiver and DB9 connector.
+  Use a real RS-232 path such as a USB-to-RS232 adapter, not a direct USB-TTL
+  cable.
 - `ledg[0]` blinks at ~0.37 Hz from the hardware heartbeat divider. If it
   does not blink, the clock network or reset is wrong — CPU cannot be the
   culprit because the divider is independent of the core.
 - `ledg[1]` reflects `core_sleep`. With `FPU=0` and `COREV_CLUSTER=0`, it
   will only go high if firmware executes `wfi`. The LED-shift demo never
   does, so expect it to stay dark.
-- If you later add UART / LCD, copy the remaining rows from
+- If you later add LCD, copy the remaining LCD rows from
   `../de2i_150_test/PIN_ASSIGNMENTS.md` — pin list was already validated
   against the user manual in that project.

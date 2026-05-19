@@ -3,19 +3,39 @@ CROSS ?= riscv64-unknown-elf-
 CC      := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 
+PROGRAM ?= smoke
+
 # Keep the smoke firmware word-aligned. CV32E40P supports compressed
 # instructions, but the hardware-loop controller compares aligned 32-bit PCs,
 # so this bring-up test is built without C-extension instructions.
-ARCH_FLAGS := -march=rv32im -mabi=ilp32
-CFLAGS     := -Os -ffreestanding -nostdlib -Wall -Wextra $(ARCH_FLAGS)
+ARCH_FLAGS := -march=rv32im_zicsr -mabi=ilp32
+COMMON_CFLAGS := -ffreestanding -nostdlib -Wall -Wextra $(ARCH_FLAGS)
 LDFLAGS    := -Wl,--build-id=none,-Bstatic,-T,sections.lds,--strip-debug
 
-.PHONY: all clean
+ifeq ($(PROGRAM),smoke)
+MAIN_SRC := main.c
+OPT_FLAGS := -Os
+else ifeq ($(PROGRAM),benchmark)
+MAIN_SRC := benchmark.c
+OPT_FLAGS := -O2
+else
+$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke or PROGRAM=benchmark)
+endif
+
+CFLAGS := $(OPT_FLAGS) $(COMMON_CFLAGS)
+
+.PHONY: all clean smoke benchmark FORCE
 
 all: firmware.hex firmware_byte0.hex firmware_byte1.hex firmware_byte2.hex firmware_byte3.hex
 
-firmware.elf: start.s main.c ai_ops.h sections.lds
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ start.s main.c
+smoke:
+	$(MAKE) PROGRAM=smoke clean all
+
+benchmark:
+	$(MAKE) PROGRAM=benchmark clean all
+
+firmware.elf: FORCE start.s $(MAIN_SRC) ai_ops.h perf.h sections.lds Makefile
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ start.s $(MAIN_SRC)
 
 firmware.bin: firmware.elf
 	$(OBJCOPY) -O binary $< $@
@@ -33,3 +53,5 @@ firmware_byte3.hex: firmware_byte0.hex
 
 clean:
 	rm -f firmware.elf firmware.bin firmware.hex firmware_byte*.hex
+
+FORCE:
