@@ -48,7 +48,8 @@ module cv32e40p_id_stage
     parameter APU_WOP_CPU = 6,
     parameter APU_NDSFLAGS_CPU = 15,
     parameter APU_NUSFLAGS_CPU = 5,
-    parameter DEBUG_TRIGGER_EN = 1
+    parameter DEBUG_TRIGGER_EN = 1,
+    parameter FPGA_TIMING_MODE = 0
 ) (
     input logic clk,  // Gated clock
     input logic clk_ungated_i,  // Ungated clock
@@ -619,7 +620,7 @@ module cv32e40p_id_stage
   // Operand a forwarding mux
   always_comb begin : operand_a_fw_mux
     case (operand_a_fw_mux_sel)
-      SEL_FW_EX:   operand_a_fw_id = regfile_alu_wdata_fw_i;
+      SEL_FW_EX:   operand_a_fw_id = (FPGA_TIMING_MODE == 0) ? regfile_alu_wdata_fw_i : regfile_data_ra_id;
       SEL_FW_WB:   operand_a_fw_id = regfile_wdata_wb_i;
       SEL_REGFILE: operand_a_fw_id = regfile_data_ra_id;
       default:     operand_a_fw_id = regfile_data_ra_id;
@@ -685,7 +686,7 @@ module cv32e40p_id_stage
   // Operand b forwarding mux
   always_comb begin : operand_b_fw_mux
     case (operand_b_fw_mux_sel)
-      SEL_FW_EX:   operand_b_fw_id = regfile_alu_wdata_fw_i;
+      SEL_FW_EX:   operand_b_fw_id = (FPGA_TIMING_MODE == 0) ? regfile_alu_wdata_fw_i : regfile_data_rb_id;
       SEL_FW_WB:   operand_b_fw_id = regfile_wdata_wb_i;
       SEL_REGFILE: operand_b_fw_id = regfile_data_rb_id;
       default:     operand_b_fw_id = regfile_data_rb_id;
@@ -730,7 +731,7 @@ module cv32e40p_id_stage
   // Operand c forwarding mux
   always_comb begin : operand_c_fw_mux
     case (operand_c_fw_mux_sel)
-      SEL_FW_EX:   operand_c_fw_id = regfile_alu_wdata_fw_i;
+      SEL_FW_EX:   operand_c_fw_id = (FPGA_TIMING_MODE == 0) ? regfile_alu_wdata_fw_i : regfile_data_rc_id;
       SEL_FW_WB:   operand_c_fw_id = regfile_wdata_wb_i;
       SEL_REGFILE: operand_c_fw_id = regfile_data_rc_id;
       default:     operand_c_fw_id = regfile_data_rc_id;
@@ -1117,7 +1118,8 @@ module cv32e40p_id_stage
   cv32e40p_controller #(
       .COREV_CLUSTER(COREV_CLUSTER),
       .COREV_PULP   (COREV_PULP),
-      .FPU          (FPU)
+      .FPU          (FPU),
+      .FPGA_TIMING_MODE(FPGA_TIMING_MODE)
   ) controller_i (
       .clk          (clk),  // Gated clock
       .clk_ungated_i(clk_ungated_i),  // Ungated clock
@@ -1496,21 +1498,22 @@ module cv32e40p_id_stage
       // misaligned data access case
       if (ex_ready_i) begin  // misaligned access case, only unstall alu operands
 
-        // if we are using post increments, then we have to use the
-        // original value of the register for the second memory access
-        // => keep it stalled
+        // In FPGA timing mode, do not feed the EX ALU result back into the
+        // ID/EX operand registers. For the second part of a misaligned access,
+        // keep the previous base operand and advance the local offset.
         if (prepost_useincr_ex_o == 1'b1) begin
-          alu_operand_a_ex_o <= operand_a_fw_id;
+          alu_operand_b_ex_o <= alu_operand_b_ex_o + 32'h4;
+        end else begin
+          alu_operand_b_ex_o <= 32'h4;
         end
 
-        alu_operand_b_ex_o   <= 32'h4;
         regfile_alu_we_ex_o  <= 1'b0;
         prepost_useincr_ex_o <= 1'b1;
 
         data_misaligned_ex_o <= 1'b1;
       end
     end else if (mult_multicycle_i) begin
-      mult_operand_c_ex_o <= operand_c_fw_id;
+      mult_operand_c_ex_o <= (FPGA_TIMING_MODE == 0) ? operand_c_fw_id : regfile_alu_wdata_fw_i;
     end else begin
       // normal pipeline unstall case
 

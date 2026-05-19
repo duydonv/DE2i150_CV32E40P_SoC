@@ -1,7 +1,7 @@
 // DE2i-150 + CV32E40P bring-up SoC
 //
 // Contents:
-//   * cv32e40p_top (FPU=0, COREV_PULP=0, COREV_CLUSTER=0)
+//   * cv32e40p_top (FPU=0, COREV_PULP=1, COREV_CLUSTER=0)
 //   * 32 KB on-chip BRAM, dual-port, split into 4 byte lanes for M9K inference
 //   * OBI <-> BRAM shim (1-cycle latency, always grant)
 //   * MMIO LED register at 0x0300_0000
@@ -73,13 +73,14 @@ module de2i150_cv32e40p_top (
     // substitute our FPGA pass-through shim via the search path.
     // ------------------------------------------------------------------
     cv32e40p_top #(
-        .COREV_PULP      (0),
+        .COREV_PULP      (1),
         .COREV_CLUSTER   (0),
         .FPU             (0),
         .FPU_ADDMUL_LAT  (0),
         .FPU_OTHERS_LAT  (0),
         .ZFINX           (0),
-        .NUM_MHPMCOUNTERS(1)
+        .NUM_MHPMCOUNTERS(1),
+        .FPGA_TIMING_MODE(1)
     ) u_core (
         .clk_i              (clk),
         .rst_ni             (rst_n),

@@ -6,10 +6,20 @@ sister project to the already-working PicoRV32 bring-up in
 `../de2i_150_test` and reuses the same board integration style (pin map,
 SDC, byte-lane BRAM, RISC-V GCC toolchain, `$readmemh` init).
 
-The first milestone is **just blinking LEDs** — no UART, no LCD, no
-interrupts, no debug module. Once this is stable, we extend it with the
-custom AI / quantisation instructions (MAC, dot4.acc, ReLU, clamp,
-lp.setup, p.lw) that the core already has hooks for.
+The first milestone was **just blinking LEDs**. The current firmware is a
+PULP smoke test that maps the earlier gem5 AI-extension prototype onto the
+CORE-V instructions already present in CV32E40P: `cv.mac`, `cv.sdotsp.b`,
+`cv.max`, `cv.clipur`, `cv.lw` post-increment, and `cv.setup`.
+
+Current status as of 2026-05-17:
+
+- `COREV_PULP=1`, `FPU=0`, `COREV_CLUSTER=0`.
+- `FPGA_TIMING_MODE=1` is enabled in the local core copy to close 50 MHz
+  timing on Cyclone IV.
+- The smoke firmware is built as `rv32im`, not `rv32imc`, so the hardware
+  loop test stays word-aligned during bring-up.
+- LEDG0 heartbeat has been observed working on the board. LEDR[7:0] reports
+  the PULP smoke-test status.
 
 ## Directory layout
 
@@ -29,11 +39,12 @@ de2i150_cv32e40p_soc/
 │       └── de2i150_cv32e40p_top.v   <- board wrapper: clocking, reset
 │                                       sync, OBI <-> BRAM shim, LED MMIO
 ├── firmware/
-│   ├── main.c                        <- LED shift (writes 0x0300_0000)
+│   ├── ai_ops.h                      <- CORE-V/PULP .insn wrappers
+│   ├── main.c                        <- PULP smoke test, LED pass/fail
 │   ├── start.s                       <- RV32 crt0
 │   ├── sections.lds                  <- linker script (32 KB RAM at 0x0)
 │   ├── split_hex.py                  <- turn firmware.bin into 4 byte-lanes
-│   └── Makefile                      <- riscv64-unknown-elf, rv32imc
+│   └── Makefile                      <- riscv64-unknown-elf, rv32im
 ├── de2i150_cv32e40p_top.sdc
 ├── PIN_ASSIGNMENTS.md
 └── README.md
@@ -54,7 +65,7 @@ From `/home/duydonv/cv32e40p/rtl`:
 | `cv32e40p_register_file_ff.sv` | **flip-flop** register file, not the latch one |
 | `cv32e40p_aligner.sv`, `cv32e40p_compressed_decoder.sv`, `cv32e40p_decoder.sv` | decode |
 | `cv32e40p_fifo.sv`, `cv32e40p_prefetch_buffer.sv`, `cv32e40p_prefetch_controller.sv` | fetch FIFO |
-| `cv32e40p_hwloop_regs.sv` | even with COREV_PULP=0, file is referenced |
+| `cv32e40p_hwloop_regs.sv` | hardware-loop state used when `COREV_PULP=1` |
 | `cv32e40p_mult.sv`, `cv32e40p_alu.sv`, `cv32e40p_alu_div.sv`, `cv32e40p_ff_one.sv`, `cv32e40p_popcnt.sv` | arith |
 | `cv32e40p_apu_disp.sv` | referenced by core even with FPU=0 |
 | `cv32e40p_controller.sv`, `cv32e40p_int_controller.sv` | control / IRQ |
@@ -70,7 +81,7 @@ Intentionally **excluded**:
   (replaced by our FPGA shim).
 - `example_tb/` — not needed for synthesis.
 
-## The four gotchas you flagged, and how each is handled
+## FPGA gotchas, and how each is handled
 
 ### 1. Clock network is ASIC-style
 
@@ -163,6 +174,36 @@ most, so a few things matter:
    for the exact list. **Do not** copy CV32E40P files from upstream on
    top of `rtl/core/` without re-applying the patches.
 
+### 5. PULP timing on Cyclone IV
+
+Enabling `COREV_PULP=1` made the initial post-fit Fmax fall to roughly
+37.6 MHz. The critical issue was the long direct producer-consumer path:
+
+```text
+EX result -> ID forwarding mux -> ID/EX operand register
+```
+
+The local core copy therefore adds an `FPGA_TIMING_MODE` parameter. With
+`FPGA_TIMING_MODE=1`, the controller inserts one bubble for direct
+ALU/MUL producer-consumer dependencies and disables the direct EX-to-ID
+forwarding mux in that mode. This costs some IPC on back-to-back dependent
+instructions, but closes the 50 MHz board clock.
+
+The top-level SoC currently instantiates:
+
+```verilog
+cv32e40p_top #(
+    .COREV_PULP      (1),
+    .COREV_CLUSTER   (0),
+    .FPU             (0),
+    .FPU_ADDMUL_LAT  (0),
+    .FPU_OTHERS_LAT  (0),
+    .ZFINX           (0),
+    .NUM_MHPMCOUNTERS(1),
+    .FPGA_TIMING_MODE(1)
+)
+```
+
 ## How to create the Quartus project
 
 You drive the GUI; the tool generates its own `.qpf` / `.qsf`. Only
@@ -204,38 +245,103 @@ make                   # produces firmware.elf, firmware.bin,
                        #   firmware.hex, firmware_byte{0..3}.hex
 ```
 
-The Makefile uses `riscv64-unknown-elf-gcc -march=rv32imc -mabi=ilp32`.
-`rv32imc` matches what CV32E40P implements out of the box (I + M + C,
-no F, no custom PULP). When we later enable the custom AI extension we
-will switch to a custom `-march` via a GCC multi-arch or `.insn r`
-macros; the infrastructure in this directory does not change.
+The Makefile currently uses
+`riscv64-unknown-elf-gcc -march=rv32im -mabi=ilp32`. CV32E40P supports
+compressed instructions, but this smoke firmware intentionally disables
+the C extension so the `cv.setup` hardware-loop test remains word-aligned.
+
+The stock toolchain does not know CORE-V mnemonics, so `firmware/ai_ops.h`
+uses GNU assembler `.insn` directives for the PULP instructions. Once a
+CORE-V-aware GCC is installed, these wrappers can be changed to mnemonic
+inline assembly or builtins without changing the SoC. Always check the
+result with `riscv64-unknown-elf-objdump -d firmware.elf` after changing
+toolchains or wrappers.
 
 Every time you edit firmware you must **re-run `make`** and then
 **re-compile the Quartus project** (the `$readmemh` files are only
 consumed at synthesis time — there is no runtime loader).
 
-## Expected behaviour after first download
+## Current AI/PULP instruction mapping
+
+The goal for board bring-up is functional equivalence with the earlier gem5
+prototype, not preserving the exact same prototype opcode placement. The
+current firmware maps the six operations to CORE-V/PULP hardware already in
+CV32E40P:
+
+| Firmware operation | Current hardware mapping |
+|--------------------|--------------------------|
+| `ai_mac(acc, a, b)` | `cv.mac` via `.insn r 0x2b, 3, 0x48` |
+| `ai_dot4_acc(acc, a, b)` | `cv.sdotsp.b` via `.insn r 0x7b, 1, 0x54` |
+| `ai_relu(x)` | `cv.max x, x, x0` via `.insn r 0x2b, 3, 0x2d` |
+| `ai_clamp(x, ub)` | `cv.clipur` via `.insn r 0x2b, 3, 0x3b` |
+| `AI_PLW_U32(ptr, imm)` | `cv.lw rd, (rs1), imm` via `.insn i 0x0b, 2` |
+| `AI_LP_SETUP_L0(count, body_bytes)` | `cv.setup L0, rs1, uimmL` via `.insn i 0x2b, 4` |
+
+Two semantics are intentionally aligned to the real CORE-V hardware:
+
+- `ai_clamp(x, ub)` clamps to `[0, ub]` with a register upper bound.
+- `AI_PLW_U32` loads from the current base pointer and then post-increments
+  the pointer by the signed immediate. For an offset stream, pre-bias the
+  pointer before the loop.
+
+For `cv.setup` encoded through raw `.insn`, the immediate is not byte-based:
+
+```text
+raw_imm = number_of_32_bit_body_instructions + 1
+```
+
+For example, a three-instruction loop body uses raw immediate `4`. The
+`AI_LP_SETUP_L0(count, body_bytes)` macro handles this conversion.
+
+## Expected behaviour after download
 
 - **LEDG0** blinks at ~0.37 Hz (26-bit divider on 50 MHz). If this doesn't
   blink, the clock or reset is wrong — CPU cannot be at fault because
   the divider is independent of the core.
 - **LEDG1** stays dark. It tracks `core_sleep`. If it lights, the core
-  has executed `wfi`; the LED-shift demo never does.
-- **LEDR[7:0]** shifts one lit LED from `LEDR0` to `LEDR7` and wraps.
-  Period ~0.3 s (from the `delay(1500000)` loop).
+  has executed `wfi`; the PULP smoke test never does.
+- **LEDR[7:0]** blinks between `0xA5` and `0x00` if all smoke tests pass.
+- **LEDR[7:0]** blinks between `0xE1`..`0xE6` and `0x00` if a smoke test fails:
+  `E1=cv.mac`, `E2=cv.sdotsp.b`, `E3=cv.max/ReLU`, `E4=cv.clipur`,
+  `E5=cv.lw post-increment`, `E6=cv.setup` hardware loop.
 - **LEDR[17:8]** stay dark. Reserved for later demos.
+
+## Current PULP synthesis status
+
+With `COREV_PULP=1`, `FPU=0`, and the PULP smoke firmware:
+
+- Full Quartus compile passes and produces
+  `output_files/de2i150_cv32e40p_top.sof`.
+- Post-fit resources from `output_files/de2i150_cv32e40p_top.fit.summary`:
+  12,833 logic elements, 2,522 registers, 524,288 memory bits, and 16
+  embedded 9-bit multiplier elements.
+- Timing is closed for the 50 MHz board clock with `FPGA_TIMING_MODE=1`.
+  On the slow 1200 mV 85C model:
+  - Fmax: 50.95 MHz
+  - Worst setup slack: +0.372 ns
+  - Worst hold slack: +0.374 ns
 
 ## Roadmap
 
-1. Add a simple UART peripheral copied from the PicoRV32 project so we
+1. Confirm and record the latest LEDR smoke-test result from the board after
+   each regenerated `.sof`.
+2. Save the post-fit resource reports for both baseline (`COREV_PULP=0`)
+   and current (`COREV_PULP=1`, `FPGA_TIMING_MODE=1`) builds.
+3. Split the firmware into smoke-test and benchmark modes, or add a compile
+   switch so LED delay code does not affect benchmark measurements.
+4. Bring up a tiny INT8 benchmark using both plain C and the `ai_ops.h`
+   wrappers. Measure `mcycle` / `minstret` around the kernel.
+5. Align the gem5 prototype semantics with the board implementation:
+   register-bound clamp, CORE-V style post-increment load, and functional
+   matching before performance-model tuning.
+6. Install or build a CORE-V-aware toolchain so firmware can use CORE-V
+   mnemonics or builtins instead of raw `.insn`.
+7. Add a simple UART peripheral copied from the PicoRV32 project so we
    can print heartbeats and observe state over `/dev/ttyUSB0` at 115200
    8N1.
-2. Add a scratch LCD output mirror, also from the PicoRV32 project.
-3. Enable `COREV_PULP=1` in the core, then validate `lp.setup`,
-   `p.lw`, MAC/dot-product from firmware. This is the reason we picked
-   CV32E40P in the first place.
-4. Bolt on the custom AI quantisation instructions (MAC, dot4.acc,
-   ReLU, clamp) via the APU interface or as extra decoder entries,
-   depending on pipeline pressure.
-5. Bring up a tiny INT8 test kernel and profile cycle-accurately in
-   Questa before pushing a synthesis build.
+8. Add a scratch LCD output mirror, also from the PicoRV32 project.
+9. Only after resource/performance data is available, decide whether to keep
+   full `COREV_PULP=1` or turn PULP off and re-implement a smaller custom
+   subset. The risky parts of a custom subset are `cv.setup` and `cv.lw`
+   post-increment, because they touch PC/control-flow, LSU, and register
+   writeback rather than only the ALU datapath.
