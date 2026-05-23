@@ -26,7 +26,16 @@
 #define LED_STATUS_ALL_PASS   0xa5u
 #define LED_STATUS_FAIL_BASE  0xe0u
 
+#define LED_STATUS_POWER_START 0x40u
+#define LED_STATUS_POWER_FAIL  0xefu
+
 #define REPORT_DELAY_CYCLES 50000000u
+
+#define POWER_SIM_VARIANT_BASELINE 0u
+#define POWER_SIM_VARIANT_CUSTOM   1u
+
+#define EXPECTED_MAC_CLAMP_CHECKSUM  0x06535320u
+#define EXPECTED_DOT4_CLAMP_CHECKSUM 0x9587070eu
 
 typedef uint32_t (*bench_fn_t)(void);
 
@@ -461,6 +470,62 @@ static void uart_print_report(const bench_result_t *results, uint32_t count)
     uart_puts("\nSpeed = baseline_cycles / custom_cycles\n");
 }
 
+#ifdef POWER_SIM
+
+#ifndef POWER_SIM_BENCH
+#define POWER_SIM_BENCH BENCH_MAC_CLAMP_ID
+#endif
+
+#ifndef POWER_SIM_VARIANT
+#define POWER_SIM_VARIANT POWER_SIM_VARIANT_CUSTOM
+#endif
+
+int main(void)
+{
+    uint32_t checksum;
+    uint32_t expected_checksum;
+
+    LED_REG = LED_STATUS_INIT;
+    enable_perf_counters();
+    init_inputs();
+
+    LED_REG = LED_STATUS_POWER_START;
+
+#if POWER_SIM_BENCH == BENCH_MAC_CLAMP_ID
+    expected_checksum = EXPECTED_MAC_CLAMP_CHECKSUM;
+#if POWER_SIM_VARIANT == POWER_SIM_VARIANT_BASELINE
+    checksum = bench_mac_clamp_baseline();
+#else
+    checksum = bench_mac_clamp_custom();
+#endif
+#elif POWER_SIM_BENCH == BENCH_DOT4_CLAMP_ID
+    expected_checksum = EXPECTED_DOT4_CLAMP_CHECKSUM;
+#if POWER_SIM_VARIANT == POWER_SIM_VARIANT_BASELINE
+    checksum = bench_dot4_clamp_baseline();
+#else
+    checksum = bench_dot4_clamp_custom();
+#endif
+#elif POWER_SIM_BENCH == BENCH_DOT4_STREAM_ID
+    expected_checksum = EXPECTED_DOT4_CLAMP_CHECKSUM;
+#if POWER_SIM_VARIANT == POWER_SIM_VARIANT_BASELINE
+    checksum = bench_dot4_clamp_baseline();
+#else
+    checksum = bench_dot4_stream_custom();
+#endif
+#else
+#error "Unsupported POWER_SIM_BENCH value"
+#endif
+
+    LED_REG = (checksum == expected_checksum) ? LED_STATUS_ALL_PASS :
+        LED_STATUS_POWER_FAIL;
+
+    while (1) {
+        delay_cycles(REPORT_DELAY_CYCLES);
+    }
+}
+
+#else
+
 int main(void)
 {
     bench_result_t results[3];
@@ -504,3 +569,5 @@ int main(void)
         delay_cycles(REPORT_DELAY_CYCLES);
     }
 }
+
+#endif
