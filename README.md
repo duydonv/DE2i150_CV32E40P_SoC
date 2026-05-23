@@ -6,20 +6,23 @@ sister project to the already-working PicoRV32 bring-up in
 `../de2i_150_test` and reuses the same board integration style (pin map,
 SDC, byte-lane BRAM, RISC-V GCC toolchain, `$readmemh` init).
 
-The first milestone was **just blinking LEDs**. The current firmware is a
-PULP smoke test that maps the earlier gem5 AI-extension prototype onto the
-CORE-V instructions already present in CV32E40P: `cv.mac`, `cv.sdotsp.b`,
-`cv.max`, `cv.clipur`, `cv.lw` post-increment, and `cv.setup`.
+The first milestone was **just blinking LEDs**. The current firmware now has
+two board modes: a PULP smoke test and a UART benchmark suite that maps the
+earlier gem5 AI-extension prototype onto the CORE-V instructions already
+present in CV32E40P: `cv.mac`, `cv.sdotsp.b`, `cv.max`, `cv.clipur`,
+`cv.lw` post-increment, and `cv.setup`.
 
-Current status as of 2026-05-17:
+Current status as of 2026-05-23:
 
 - `COREV_PULP=1`, `FPU=0`, `COREV_CLUSTER=0`.
 - `FPGA_TIMING_MODE=1` is enabled in the local core copy to close 50 MHz
   timing on Cyclone IV.
 - The firmware is built as `rv32im_zicsr`, not `rv32imc`, so the hardware
   loop test stays word-aligned while benchmark code can read CSR counters.
-- LEDG0 heartbeat has been observed working on the board. LEDR[7:0] reports
-  the PULP smoke-test status.
+- LEDG0 heartbeat, UART TX output, and the 3-row benchmark report have been
+  verified on the DE2i-150 board.
+- Questa RTL simulation now generates per-kernel VCD files for Quartus Power
+  Analyzer; see `sim/README.md`.
 
 ## Directory layout
 
@@ -42,11 +45,16 @@ de2i150_cv32e40p_soc/
 │   ├── ai_ops.h                      <- CORE-V/PULP .insn wrappers
 │   ├── main.c                        <- PULP smoke test, LED pass/fail
 │   ├── benchmark.c                   <- baseline-vs-CORE-V UART benchmark
+│   ├── BENCHMARKS.md                  <- benchmark groups, UART output, LED codes
 │   ├── perf.h                        <- CSR, LED, UART helpers
 │   ├── start.s                       <- RV32 crt0
 │   ├── sections.lds                  <- linker script (32 KB RAM at 0x0)
 │   ├── split_hex.py                  <- turn firmware.bin into 4 byte-lanes
 │   └── Makefile                      <- riscv64-unknown-elf, rv32im_zicsr
+├── sim/
+│   ├── power_tb.sv                    <- Questa testbench for power VCD windows
+│   ├── run_power_vcd.sh               <- build/run one or all VCD scenarios
+│   └── README.md                      <- VCD + Quartus Power Analyzer flow
 ├── de2i150_cv32e40p_top.sdc
 ├── PIN_ASSIGNMENTS.md
 └── README.md
@@ -272,9 +280,10 @@ make smoke       # default pass/fail smoke test on LEDR[7:0]
 make benchmark   # baseline-vs-CORE-V/PULP performance benchmark
 ```
 
-The benchmark firmware measures `mcycle` and `minstret` for two groups:
-`MAC + ReLU + Clamp`, and `Dot4_acc + ReLU + Clamp + p.lw + lp.setup`.
-Exact results are printed over the board DB9 RS-232 UART at 115200 8N1.
+The benchmark firmware measures `mcycle` and `minstret` for three groups:
+`MAC + Clamp`, `Dot4_acc + Clamp`, and
+`Dot4_acc + Clamp + p.lw + lp.setup`. Exact results are printed as a
+fixed-width table over the board DB9 RS-232 UART at 115200 8N1.
 `LEDR[7:0]` is only a compact status code; see `firmware/BENCHMARKS.md`.
 
 ## Current AI/PULP instruction mapping
@@ -320,10 +329,11 @@ For example, a three-instruction loop body uses raw immediate `4`. The
 - **LEDR[7:0]** blinks between `0xE1`..`0xE6` and `0x00` if a smoke test fails:
   `E1=cv.mac`, `E2=cv.sdotsp.b`, `E3=cv.max/ReLU`, `E4=cv.clipur`,
   `E5=cv.lw post-increment`, `E6=cv.setup` hardware loop.
-- With benchmark firmware, **UART TX** repeatedly prints the saved CSV
-  report after the benchmark has run once. **LEDR[7:0]** shows `0x01`
-  during init, `0x11` during the MAC group, `0x12` during the Dot4 group,
-  `0xA5` if both groups pass, or `0xE1`..`0xE3` for checksum mismatches.
+- With benchmark firmware, **UART TX** repeatedly prints the saved
+  fixed-width report after the benchmark has run once. **LEDR[7:0]** shows
+  `0x01` during init, `0x11` during the MAC/Clamp pair, `0x12` during the
+  Dot4/Clamp pair, `0x13` during the Dot4/p.lw/lp.setup/Clamp pair,
+  `0xA5` if all three groups pass, or a fail mask based at `0xE0`.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status
@@ -346,24 +356,23 @@ placed successfully but missed slow-85C setup by about 0.2 ns.
 
 ## Roadmap
 
-1. Confirm and record the latest LEDR smoke-test result from the board after
-   each regenerated `.sof`.
-2. Save the post-fit resource reports for both baseline (`COREV_PULP=0`)
-   and current (`COREV_PULP=1`, `FPGA_TIMING_MODE=1`) builds.
-3. Smoke-test and benchmark firmware modes are now split via `make smoke`
+1. Smoke-test and benchmark firmware modes are now split via `make smoke`
    and `make benchmark`.
-4. The first FPGA benchmark now compares baseline C against the CORE-V/PULP
-   wrappers and measures `mcycle` / `minstret` around the kernels.
-5. Align the gem5 prototype semantics with the board implementation:
+2. The FPGA benchmark now compares baseline C against the CORE-V/PULP
+   wrappers and measures `mcycle` / `minstret` around three kernels.
+3. Power analysis flow is present: run `sim/run_power_vcd.sh` to generate
+   VCD activity files, then import each VCD into Quartus Power Analyzer with
+   entity `de2i150_cv32e40p_top`.
+4. Align the gem5 prototype semantics with the board implementation:
    register-bound clamp, CORE-V style post-increment load, and functional
    matching before performance-model tuning.
-6. Install or build a CORE-V-aware toolchain so firmware can use CORE-V
+5. Install or build a CORE-V-aware toolchain so firmware can use CORE-V
    mnemonics or builtins instead of raw `.insn`.
-7. UART TX output is now present at 115200 8N1. UART RX command handling can
+6. UART TX output is now present at 115200 8N1. UART RX command handling can
    be added later if runtime interaction is useful.
-8. Add a scratch LCD output mirror later if the board demo needs standalone
+7. Add a scratch LCD output mirror later if the board demo needs standalone
    display without a laptop.
-9. Only after resource/performance data is available, decide whether to keep
+8. Only after resource/performance/power data is available, decide whether to keep
    full `COREV_PULP=1` or turn PULP off and re-implement a smaller custom
    subset. The risky parts of a custom subset are `cv.setup` and `cv.lw`
    post-increment, because they touch PC/control-flow, LSU, and register

@@ -73,6 +73,21 @@ Dot4_acc, Clamp, p.lw, lp.setup
 All benchmark pairs compute checksums. A pair passes only if the baseline and
 custom checksums match.
 
+## Operation counts
+
+The UART `Ops` column counts only the main arithmetic operation for the
+benchmark row: MAC for benchmark 1 and dot4_acc for benchmarks 2/3. Helper
+operations are listed separately here.
+
+| Benchmark | Main arithmetic ops | Clamp ops | Loads | Hardware-loop setup |
+|---|---:|---:|---:|---:|
+| `mac_clamp` | `512 * 32 = 16384` MAC | 512 | normal C loads | none |
+| `dot4_acc_clamp` | `128 * 64 = 8192` dot4_acc | 128 | `128 * 64 * 2 = 16384` normal word loads | none |
+| `dot4_plw_lp_clamp` | `128 * 64 = 8192` dot4_acc | 128 | `128 * 64 * 2 = 16384` `cv.lw` post-increment loads | 128 `cv.setup` |
+
+Each dot4_acc operation is equivalent to four signed int8 lane multiplies,
+so `8192` dot4_acc operations represent `32768` int8 lane multiplies.
+
 ## UART output
 
 Connect the DE2i-150 DB9 connector through a real RS-232 adapter, then open
@@ -87,7 +102,7 @@ the same fixed-width report repeatedly. This makes it safe to open the
 terminal slightly after the FPGA starts; the benchmark is not re-run between
 reports.
 
-Example format:
+Latest observed board output:
 
 ```text
 DE2i-150 CV32E40P benchmark
@@ -96,9 +111,9 @@ Clock: 50000000 Hz
 
 ID  Benchmark                 Pass     Ops    Base cyc    Cust cyc    Speed    Base ins    Cust ins  Checksum
 --  ------------------------  ----  ------  ----------  ----------  -------  ----------  ----------  ---------------------
- 1  mac_clamp                 yes    16384         ...         ...      ...         ...         ...             0x........
- 2  dot4_acc_clamp            yes     8192         ...         ...      ...         ...         ...             0x........
- 3  dot4_plw_lp_clamp         yes     8192         ...         ...      ...         ...         ...             0x........
+ 1  mac_clamp                 yes    16384      281412      263212    1.07x      226532      208924             0x06535320
+ 2  dot4_acc_clamp            yes     8192      496830       78516    6.33x      396974       52388             0x9587070e
+ 3  dot4_plw_lp_clamp         yes     8192      496830       37938   13.10x      396974       27811             0x9587070e
 ```
 
 `Speed` is `baseline_cycles / custom_cycles`. `Pass=yes` means baseline and

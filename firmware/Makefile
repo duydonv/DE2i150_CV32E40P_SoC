@@ -22,7 +22,8 @@ else
 $(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke or PROGRAM=benchmark)
 endif
 
-CFLAGS := $(OPT_FLAGS) $(COMMON_CFLAGS)
+EXTRA_CFLAGS ?=
+CFLAGS := $(OPT_FLAGS) $(COMMON_CFLAGS) $(EXTRA_CFLAGS)
 
 .PHONY: all clean smoke benchmark FORCE
 
