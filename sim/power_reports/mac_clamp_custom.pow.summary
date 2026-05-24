@@ -1,0 +1,12 @@
+Power Analyzer Status : Successful - Sun May 24 11:57:16 2026
+Quartus Prime Version : 25.1std.0 Build 1129 10/21/2025 SC Lite Edition
+Revision Name : de2i150_cv32e40p_top
+Top-level Entity Name : de2i150_cv32e40p_top
+Family : Cyclone IV GX
+Device : EP4CGX150DF31C7
+Power Models : Final
+Total Thermal Power Dissipation : 359.88 mW
+Core Dynamic Thermal Power Dissipation : 226.73 mW
+Core Static Thermal Power Dissipation : 119.81 mW
+I/O Thermal Power Dissipation : 13.34 mW
+Power Estimation Confidence : Low: user provided insufficient toggle rate data
