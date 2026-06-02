@@ -5,6 +5,12 @@ instruction wrappers already used by the smoke test. It is intended for the
 real DE2i-150 kit. Results are printed over the board DB9 RS-232 UART at
 115200 8N1.
 
+The three benchmark groups intentionally mirror the gem5 harness in
+`/home/duydonv/gem5/tests/gem5/riscv_ai_ext`: `mac_clamp`,
+`dot4_acc_clamp`, and `dot4_plw_lp_clamp`. The board numbers are the primary
+hardware result; gem5 uses matched semantics for smoke/regression and
+performance sensitivity studies.
+
 Build the smoke firmware, as before:
 
 ```bash

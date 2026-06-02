@@ -1,7 +1,7 @@
 # HANDOFF — DE2i-150 + CV32E40P bring-up
 
 > Tài liệu bàn giao trạng thái dự án để bất kỳ agent / developer mới nào
-> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **23/05/2026**.
+> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **02/06/2026**.
 
 ## 1. Mục tiêu cuối cùng
 
@@ -53,6 +53,27 @@ Trạng thái cần nhớ: bản `COREV_PULP=1` hiện đã ổn định để l
 performance/resource/power. Chưa nên tự viết lại subset custom trừ khi có
 thời gian verify kỹ, đặc biệt với `p.lw` và `lp.setup`.
 
+## 1.2 Update đồng bộ gem5 đến ngày 02/06/2026
+
+Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
+
+- Semantics gem5 đã được căn lại theo board implementation hiện tại:
+  register-bound `clamp`, `p.lw` load-before-post-increment, và `lp.setup`
+  dùng raw CORE-V immediate `body_words + 1`.
+- Gem5 vẫn giữ prototype custom-0 encoding; SoC/firmware vẫn dùng CORE-V/PULP
+  `.insn` mapping thật trên CV32E40P. Vì vậy so sánh cần dựa trên semantics,
+  không dựa trên opcode bit pattern.
+- Gem5 đã có chế độ sensitivity `--no-cache --memory fast-ram` dùng
+  `SingleChannelSimpleMemory(latency=1ns, bandwidth=256GiB/s)` để gần hơn với
+  kit-local RAM so với NoCache + DDR3 mặc định.
+- O3/FDP hardware-loop path trong gem5 đã cải thiện nhưng chưa phải mô hình
+  cycle-for-cycle của CV32E40P. Cached O3 vẫn còn residual execute-time repair
+  trên microbenchmark; thử ép setup-time squash/re-fetch làm
+  `nonControlRedirects=0` nhưng fast-ram bị regress nên đã revert.
+- Khi viết báo cáo/bàn giao, ưu tiên số liệu board UART benchmark là kết quả
+  thực nghiệm chính. Gem5 nên được trình bày như smoke/regression và
+  modeling/sensitivity support.
+
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
 | Hạng mục | Trạng thái | Verified ở đâu |
@@ -71,6 +92,7 @@ thời gian verify kỹ, đặc biệt với `p.lw` và `lp.setup`.
 | Benchmark firmware baseline vs CORE-V/PULP | ✅ | `firmware/benchmark.c`, `firmware/perf.h`, `firmware/BENCHMARKS.md` |
 | 3-row UART benchmark table trên kit | ✅ | `mac_clamp`, `dot4_acc_clamp`, `dot4_plw_lp_clamp` đều pass checksum |
 | Power VCD flow cho Quartus Power Analyzer | ✅ | `sim/run_power_vcd.sh`, `sim/power_tb.sv`, `sim/README.md` |
+| Đồng bộ semantics với gem5 prototype | ✅ | register-bound clamp, CORE-V `p.lw`, raw-imm `lp.setup`; xem gem5 `riscv_ai_ext/HANDOFF.md` |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |
@@ -176,7 +198,8 @@ ro sửa core.
 | `p.lw` | `cv.lw rd, (rs1), imm` qua custom-0 `.insn i 0x0b, 2` | Hardware đọc tại `rs1`, sau đó `rs1 += sext(imm)` |
 | `lp.setup` | `cv.setup L0, rs1, uimmL` qua `.insn i 0x2b, 4` | Hardware loop L0, count từ `rs1` |
 
-Hai điểm sai khác đã chốt so với gem5 prototype ban đầu:
+Hai điểm sai khác đã chốt so với gem5 prototype ban đầu, và gem5 hiện đã được
+cập nhật để match các semantics này:
 
 - `clamp`: gem5 trước đó cho upper bound bất kỳ. Trên core hiện tại dùng
   `cv.clipur` dạng register upper bound, không phải kiểu `2^n - 1` immediate.
