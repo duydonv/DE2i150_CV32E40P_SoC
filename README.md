@@ -12,7 +12,7 @@ earlier gem5 AI-extension prototype onto the CORE-V instructions already
 present in CV32E40P: `cv.mac`, `cv.sdotsp.b`, `cv.max`, `cv.clipur`,
 `cv.lw` post-increment, and `cv.setup`.
 
-Current status as of 2026-05-23:
+Current status as of 2026-06-02:
 
 - `COREV_PULP=1`, `FPU=0`, `COREV_CLUSTER=0`.
 - `FPGA_TIMING_MODE=1` is enabled in the local core copy to close 50 MHz
@@ -23,6 +23,10 @@ Current status as of 2026-05-23:
   verified on the DE2i-150 board.
 - Questa RTL simulation now generates per-kernel VCD files for Quartus Power
   Analyzer; see `sim/README.md`.
+- The sister gem5 prototype has been semantically aligned to this board
+  mapping. gem5 still uses prototype custom-0 encodings and an O3 model, so its
+  numbers are best treated as regression/sensitivity points rather than direct
+  replacements for the board benchmark.
 
 ## Directory layout
 
@@ -288,10 +292,10 @@ fixed-width table over the board DB9 RS-232 UART at 115200 8N1.
 
 ## Current AI/PULP instruction mapping
 
-The goal for board bring-up is functional equivalence with the earlier gem5
-prototype, not preserving the exact same prototype opcode placement. The
-current firmware maps the six operations to CORE-V/PULP hardware already in
-CV32E40P:
+The board implementation is the current source of truth. The sister gem5
+prototype has been updated to match these semantics, but exact opcode placement
+is intentionally different: gem5 keeps prototype custom-0 encodings, while the
+firmware maps the six operations to CORE-V/PULP hardware already in CV32E40P:
 
 | Firmware operation | Current hardware mapping |
 |--------------------|--------------------------|
@@ -363,9 +367,11 @@ placed successfully but missed slow-85C setup by about 0.2 ns.
 3. Power analysis flow is present: run `sim/run_power_vcd.sh` to generate
    VCD activity files, then import each VCD into Quartus Power Analyzer with
    entity `de2i150_cv32e40p_top`.
-4. Align the gem5 prototype semantics with the board implementation:
-   register-bound clamp, CORE-V style post-increment load, and functional
-   matching before performance-model tuning.
+4. Keep the gem5 prototype and this board implementation synchronized at the
+   semantic/documentation level. Current synchronized points are register-bound
+   clamp, CORE-V style post-increment load, and raw-immediate hardware-loop
+   setup. Treat gem5 O3 results as modeling/sensitivity data, not as a
+   replacement for measured kit results.
 5. Install or build a CORE-V-aware toolchain so firmware can use CORE-V
    mnemonics or builtins instead of raw `.insn`.
 6. UART TX output is now present at 115200 8N1. UART RX command handling can
