@@ -7,14 +7,14 @@ The top-level SoC splits the 32-bit word at address WA into four byte lanes:
     mem3[WA] = byte 3 (bits 31:24)   <- firmware_byte3.hex
 
 Each hex file has one byte per line, WORDS lines total. WORDS must match
-MEM_WORDS in the SoC top (default 8192 = 32 KB / 4). Unused words are
+BRAM_AW_WORDS in the SoC top (default 32768 = 128 KB / 4). Unused words are
 zero-padded so $readmemh does not leave X in the M9K blocks.
 """
 import sys
 from pathlib import Path
 
 BIN_PATH = Path(sys.argv[1] if len(sys.argv) > 1 else "firmware.bin")
-WORDS    = 8192  # keep in sync with BRAM_AW_WORDS in the top module
+WORDS    = 32768  # keep in sync with BRAM_AW_WORDS in the top module
 
 data = BIN_PATH.read_bytes()
 pad  = (4 - len(data) % 4) % 4
