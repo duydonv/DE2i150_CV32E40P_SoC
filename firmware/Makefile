@@ -18,14 +18,17 @@ OPT_FLAGS := -Os
 else ifeq ($(PROGRAM),benchmark)
 MAIN_SRC := benchmark.c
 OPT_FLAGS := -O2
+else ifeq ($(PROGRAM),tiny_ai)
+MAIN_SRC := tiny_ai.c
+OPT_FLAGS := -O2
 else
-$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke or PROGRAM=benchmark)
+$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke, PROGRAM=benchmark, or PROGRAM=tiny_ai)
 endif
 
 EXTRA_CFLAGS ?=
 CFLAGS := $(OPT_FLAGS) $(COMMON_CFLAGS) $(EXTRA_CFLAGS)
 
-.PHONY: all clean smoke benchmark FORCE
+.PHONY: all clean smoke benchmark tiny_ai FORCE
 
 all: firmware.hex firmware_byte0.hex firmware_byte1.hex firmware_byte2.hex firmware_byte3.hex
 
@@ -35,7 +38,10 @@ smoke:
 benchmark:
 	$(MAKE) PROGRAM=benchmark clean all
 
-firmware.elf: FORCE start.s $(MAIN_SRC) ai_ops.h perf.h sections.lds Makefile
+tiny_ai:
+	$(MAKE) PROGRAM=tiny_ai clean all
+
+firmware.elf: FORCE start.s $(MAIN_SRC) ai_ops.h perf.h tiny_ai_model.h sections.lds Makefile
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ start.s $(MAIN_SRC)
 
 firmware.bin: firmware.elf
