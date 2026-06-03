@@ -1,7 +1,7 @@
 # HANDOFF — DE2i-150 + CV32E40P bring-up
 
 > Tài liệu bàn giao trạng thái dự án để bất kỳ agent / developer mới nào
-> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **02/06/2026**.
+> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **03/06/2026**.
 
 ## 1. Mục tiêu cuối cùng
 
@@ -27,7 +27,7 @@ AI/PULP, benchmark UART, và power-analysis flow trên kit thật:
 - Đã thêm `firmware/ai_ops.h` để bọc các instruction bằng `.insn`, vì
   toolchain `riscv64-unknown-elf-gcc` hiện tại chưa biết mnemonic CORE-V.
 - Đã thêm `FPGA_TIMING_MODE=1` để phá đường timing dài EX-result ->
-  ID-forwarding -> ID/EX operand. Với UART TX + benchmark image hiện tại,
+  ID-forwarding -> ID/EX operand. Với UART TX + benchmark image thời điểm đó,
   Quartus full compile đạt 50 MHz: Fmax `50.08 MHz`, worst setup slack
   `+0.033 ns`, worst hold slack `+0.373 ns`.
 - Firmware hiện build bằng `-march=rv32im_zicsr -mabi=ilp32` thay vì
@@ -74,6 +74,39 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   thực nghiệm chính. Gem5 nên được trình bày như smoke/regression và
   modeling/sensitivity support.
 
+## 1.3 Update tiny AI và TFLM đến ngày 03/06/2026
+
+- Đã thêm `firmware/tiny_ai.c` làm bước đệm trước TFLM: chạy MLP INT8 cực nhỏ
+  với baseline C và bản dùng CORE-V/PULP wrappers. Model/data được export từ
+  `firmware/export_tiny_ai_model.py` sang `firmware/tiny_ai_model.h`.
+- Kết quả UART mới nhất trên kit cho `tiny_ai`: model `8x8 quadrant MLP int8
+  64 -> 16 -> 4`, 8 mẫu, 8704 INT8 MACs, speedup `7.09x`, checksum
+  `0x6c75e8cf`, accuracy `8/8`.
+- Đã thêm flow TensorFlow Lite Micro generated tree tại
+  `third_party/tflm_tree` và firmware `firmware/tflm_hello.cc` để chạy
+  official `hello_world` int8 model với một op `FullyConnected`. Tree này là
+  generated dependency local và bị ignore bởi git; tái tạo bằng
+  `firmware/generate_tflm_tree.sh`.
+- TFLM cần C++17 bare-metal toolchain có libstdc++ headers. Ubuntu
+  `riscv64-unknown-elf-g++` trên máy này không đủ; build TFLM dùng xPack GNU
+  RISC-V Embedded GCC 14.2.0. Toolchain đã được đặt bền vững dưới
+  `/home/duydonv/tools/xpack-riscv-none-elf-gcc/...`.
+- Upstream TFLM source clone đã được đặt ngoài repo SoC tại
+  `/home/duydonv/src/tflite-micro`, worktree sạch ở commit `ac1fae36`. Clone
+  này chỉ cần khi regenerate/update `third_party/tflm_tree`.
+- Để TFLM fit, local BRAM/linker/splitter đã tăng từ 32 KB lên 128 KB:
+  `BRAM_AW_WORDS=15`, `sections.lds LENGTH=0x20000`,
+  `split_hex.py WORDS=32768`.
+- `tflm_hello` đã link được trên host với size
+  `text=46484 data=292 bss=4444 dec=51220`, và Quartus full compile đã pass
+  với 128 KB BRAM.
+- `tflm_hello` đã chạy pass trên kit: cycles `45149`, instret `32117`,
+  cycles/invoke `11287`, checksum `0x3a357ded`, status `0x00000000`,
+  outputs int8 `89 125 93 4`; xem `firmware/TFLM.md`.
+- UART RX vẫn chưa cần dùng ở mốc này. `tflm_hello` dùng fixed int8 inputs để
+  khoanh vùng runtime TFLM trước; RX/loader/input streaming nên thêm sau khi
+  TFLM reference chạy ổn trên board.
+
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
 | Hạng mục | Trạng thái | Verified ở đâu |
@@ -81,7 +114,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | Cấu trúc project (rtl/core, rtl/fpga, rtl/soc, firmware) | ✅ | `tree de2i150_cv32e40p_soc/` |
 | Copy core SV từ upstream `/home/duydonv/cv32e40p/rtl/` | ✅ | 28 file `.sv` + 3 package |
 | FPGA-friendly clock gate (thay `bhv/cv32e40p_sim_clock_gate.sv`) | ✅ | `rtl/fpga/cv32e40p_clock_gate.sv` |
-| OBI-to-native bus shim + 32 KB BRAM (4 byte-lane M9K) | ✅ | `rtl/soc/de2i150_cv32e40p_top.v` |
+| OBI-to-native bus shim + 128 KB BRAM (4 byte-lane M9K) | ✅ | `rtl/soc/de2i150_cv32e40p_top.v` |
 | Reset synchronizer | ✅ | Cùng file trên |
 | MMIO LED tại `0x0300_0000` | ✅ | Cùng file trên |
 | UART TX MMIO tại `0x0200_0000/0x0200_0004` | ✅ | `rtl/soc/de2i150_cv32e40p_top.v`, `firmware/perf.h` |
@@ -93,12 +126,16 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | 3-row UART benchmark table trên kit | ✅ | `mac_clamp`, `dot4_acc_clamp`, `dot4_plw_lp_clamp` đều pass checksum |
 | Power VCD flow cho Quartus Power Analyzer | ✅ | `sim/run_power_vcd.sh`, `sim/power_tb.sv`, `sim/README.md` |
 | Đồng bộ semantics với gem5 prototype | ✅ | register-bound clamp, CORE-V `p.lw`, raw-imm `lp.setup`; xem gem5 `riscv_ai_ext/HANDOFF.md` |
+| Tiny INT8 MLP pre-TFLM | ✅ | `firmware/tiny_ai.c`, `firmware/TINY_AI.md`; board UART speedup 7.09x |
+| TFLM `hello_world` int8 build | ✅ host-build | `firmware/tflm_hello.cc`, `firmware/TFLM.md`, local ignored `third_party/tflm_tree` |
+| Full compile 128 KB TFLM image | ✅ | `.sof` sinh tại `output_files/de2i150_cv32e40p_top.sof`; setup slack +0.337 ns |
+| TFLM `hello_world` board run | ✅ | UART checksum `0x3a357ded`, outputs `89 125 93 4`, pass yes |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |
 | Verify patch bằng `vlog -sv` (Questa) | ✅ | 0 error |
 | Verify patch bằng `quartus_map` | ✅ | 0 error, 77 warning sau khi thêm UART TX (đều benign) |
-| Full compile UART benchmark image | ✅ | 0 error, 84 warning; setup `+0.033 ns`, hold `+0.373 ns` |
+| Full compile UART benchmark image trước TFLM | ✅ | 0 error, 84 warning; setup `+0.033 ns`, hold `+0.373 ns` |
 | Audit logic của patch (diff vs upstream) | ✅ | Cosmetic + sim-only + set-equivalent |
 | Đối chiếu với cộng đồng (Issue OpenHW #1050) | ✅ | Trùng 5/5 nhóm fix; OpenHW từ chối merge upstream |
 | So sánh với `sv2v` (alt route) | ✅ | sv2v cũng chạy được, ±0.6% LE; chọn manual patch để debug Signal Tap dễ hơn |
@@ -166,8 +203,8 @@ cv32e40p_top #(
 | `FPGA_TIMING_MODE` | 1 | Thêm bubble cho producer-consumer trực tiếp để đóng timing 50 MHz trên Cyclone IV |
 | `BOOT_ADDR` | `0x0000_0000` | Match `_start` trong `sections.lds` |
 | `MTVEC_ADDR` | `0x0000_0040` | Vector table 64 B sau boot |
-| BRAM size | 32 KB | 4 × M9K bank, mỗi bank 8-bit × 8K |
-| LED MMIO | `0x0300_0000` | Tránh đụng BRAM range `0x0` – `0x7FFF` |
+| BRAM size | 128 KB | 4 byte-lane bank, mỗi bank 8-bit × 32K |
+| LED MMIO | `0x0300_0000` | Tránh đụng BRAM range `0x0` – `0x1FFFF` |
 
 ### 3.5 Toolchain
 
@@ -179,6 +216,11 @@ cv32e40p_top #(
   `-march=rv32im_zicsr -mabi=ilp32`. Lý do: giữ hardware-loop body
   word-aligned trong bring-up, tránh compiler emit compressed instruction
   quanh `lp.setup`, và vẫn cho phép benchmark đọc CSR performance counter.
+- **TFLM dùng C++17** nên cần `g++` bare-metal có libstdc++ headers. Toolchain
+  Ubuntu `riscv64-unknown-elf-g++` trên máy này thiếu C++ standard headers;
+  build `tflm_hello` hiện dùng xPack. Đường dẫn `/tmp/...` chỉ là bring-up
+  tạm; đường dẫn lâu dài đã xác minh là
+  `/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-`.
 - Sau này vẫn nên chuyển sang `riscv32-corev-elf-gcc` hoặc CORE-V-aware
   toolchain để dùng mnemonic/builtin `cv.*`, `lp.*`, `p.lw` thay vì `.insn`.
 
@@ -281,14 +323,26 @@ de2i150_cv32e40p_soc/
 │   ├── ai_ops.h                             <- CORE-V/PULP .insn wrappers
 │   ├── main.c                               <- AI/PULP smoke test, LED pass/fail
 │   ├── benchmark.c                          <- 3-row UART benchmark + POWER_SIM mode
+│   ├── tiny_ai.c                            <- tiny INT8 MLP baseline/custom
+│   ├── tiny_ai_model.h                      <- generated tiny model/data
+│   ├── export_tiny_ai_model.py              <- export script for tiny model
+│   ├── tflm_hello.cc                        <- first TFLM hello_world firmware
+│   ├── tflm_port.cc                         <- TFLM target hooks
+│   ├── tflm_kernel_util_shim.cc             <- compatibility shim for generated tree
+│   ├── tflm_sources_minimal.txt             <- minimal TFLM source list
+│   ├── generate_tflm_tree.sh                <- regenerate ignored TFLM tree
 │   ├── BENCHMARKS.md                         <- ⭐ Benchmark groups, ops count, UART/LED output
+│   ├── TINY_AI.md                           <- ⭐ Tiny MLP notes and board result
+│   ├── TFLM.md                              <- ⭐ TFLM bring-up notes
 │   ├── perf.h                               <- CSR, UART, LED helpers
 │   ├── start.s                              <- crt0 RV32 (set sp, jump main)
-│   ├── sections.lds                         <- linker (32 KB RAM at 0x0)
+│   ├── sections.lds                         <- linker (128 KB RAM at 0x0)
 │   ├── split_hex.py                         <- bin → 4 byte-lane hex
 │   ├── Makefile                             <- riscv64-unknown-elf-gcc
 │   ├── firmware.elf / .bin / .hex           <- output sau make
 │   └── firmware_byte{0..3}.hex              <- ⭐ feed vào $readmemh trong SoC top
+├── third_party/
+│   └── tflm_tree/                           <- generated TensorFlow Lite Micro tree, ignored by git
 ├── sim/
 │   ├── power_tb.sv                           <- Questa testbench, dump VCD theo LED marker
 │   ├── run_power_vcd.sh                      <- build/run 6 power scenarios, auto-restore firmware
@@ -322,16 +376,15 @@ de2i150_cv32e40p_soc/
    .COREV_PULP(1),
    ```
 3. **Re-synthesize**: đã gặp timing fail ở 50 MHz, sau đó thêm
-   `FPGA_TIMING_MODE=1` và compile đạt timing. Image UART benchmark hiện
+   `FPGA_TIMING_MODE=1` và compile đạt timing. Image 128 KB/TFLM hiện
    cần `PLACEMENT_EFFORT_MULTIPLIER=4.0` để đóng chậm 85C:
-   - Fmax: `50.08 MHz`
-   - Worst setup slack: `+0.033 ns`
-   - Worst hold slack: `+0.373 ns`
+   - Worst setup slack: `+0.337 ns`
+   - Worst hold slack: `+0.374 ns`
 4. **Verify bằng smoke firmware**: đã có test nhỏ cho cả 6 operation trong
    `firmware/main.c`, dùng wrapper `.insn` ở `firmware/ai_ops.h`.
 5. **Trạng thái Phase 2 sau benchmark UART**:
-   - Resource current PULP+UART benchmark: khoảng 12,884 LE, 2,602 regs,
-     524,288 memory bits, 16 embedded 9-bit multiplier elements.
+   - Resource current PULP+UART+128KB BRAM/TFLM image: khoảng 13,109 LE,
+     2,614 regs, 2,097,152 memory bits, 16 embedded 9-bit multiplier elements.
    - Baseline cũ `COREV_PULP=0, FPU=0`: khoảng 7,744 logic cells, 64 RAM
      segments, 8 DSP.
    - Tự subset nhỏ hơn có thể tiết kiệm tài nguyên, nhưng hiện chưa ưu tiên
@@ -413,13 +466,24 @@ Power-analysis flow hiện tại:
 - So sánh báo cáo nên dùng cả average power và energy:
   `energy = average_power * cycles / 50_000_000`.
 
-### Phase 5 — INT8 kernel demo + profiling
+### Phase 5 — Tiny AI pre-TFLM + TFLM bring-up
 
-- Chạy 1 kernel matmul/convolution INT8 trên baseline C và bản dùng
-  CORE-V/PULP wrappers.
-- Đếm cycle qua `mcycle` CSR.
-- So sánh số liệu để chứng minh giá trị của extension trước khi quyết định
-  có cần tự build subset/custom RTL hay không.
+- ✅ Chạy `tiny_ai` với exported 8x8 quadrant MLP INT8:
+  baseline C vs CORE-V/PULP wrappers, checksum match, accuracy `8/8`,
+  speedup `7.09x` trên kit.
+- ✅ Tăng local BRAM/linker/splitter lên 128 KB để chứa runtime TFLM nhỏ.
+- ✅ Vendor generated TensorFlow Lite Micro tree và build được
+  `tflm_hello` trên host với xPack C++ toolchain.
+- ✅ Re-run Quartus full compile với 128 KB BRAM + TFLM hex:
+  `output_files/de2i150_cv32e40p_top.sof`, 0 errors, 84 warnings,
+  slow-85C setup slack `+0.337 ns`, hold slack `+0.374 ns`.
+- ✅ Nạp `.sof` và capture UART output của `tflm_hello`: checksum
+  `0x3a357ded`, outputs int8 `89 125 93 4`, status `0x00000000`, pass yes.
+- ✅ Đặt xPack toolchain vào `/home/duydonv/tools` và upstream TFLM clone vào
+  `/home/duydonv/src/tflite-micro` để tránh phụ thuộc `/tmp`.
+- ⏳ Việc kế tiếp: chuyển sang model TFLM tiny MLP tương tự `tiny_ai.c` bằng
+  reference kernel trước. Tối ưu `FullyConnected` bằng `cv.sdotsp.b`,
+  `cv.lw`, `cv.setup` chỉ nên làm sau khi reference TFLM model đã pass.
 
 ## 6. Cách verify mọi thứ vẫn work khi resume
 
@@ -431,8 +495,10 @@ cd /home/duydonv/de2i150_cv32e40p_soc
 grep -c "Quartus Lite" rtl/core/cv32e40p_*.sv rtl/core/include/cv32e40p_fpu_pkg.sv
 # Phải ra ≥8 hit (mỗi file patch có ít nhất 1 comment đánh dấu)
 
-# 2. Build firmware
-cd firmware && make clean && make
+# 2. Build firmware smoke/tiny/TFLM
+cd firmware && make smoke
+make tiny_ai
+make tflm_hello CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
 ls firmware_byte*.hex      # Phải có 4 file
 
 # 3. Synth thử hoặc full compile khi cần .sof mới
@@ -474,6 +540,8 @@ Nếu cả 3 pass thì project state intact.
 | Bật PULP làm Fmax dưới 50 MHz | Quartus timing fail dù logic function đúng | Giữ `FPGA_TIMING_MODE=1`; nếu sửa forwarding/controller phải re-run full compile và check STA |
 | `lp.setup` bằng `.insn` dùng immediate sai | LEDR `0xE6`, vòng lặp chạy sai số lần hoặc không loop | Raw immediate = `body_words + 1`; dùng `.option norvc` + `.balign 4` trong smoke test |
 | Power Analyzer báo invalid entity `tb_power.u_dut` | Ô Entity của Power Analyzer chỉ nhận top-level entity đã fit trong Quartus | Dùng Entity `de2i150_cv32e40p_top`; `tb_power` chỉ là testbench của Questa |
+| TFLM không compile với Ubuntu `riscv64-unknown-elf-g++` | Lỗi thiếu C++ standard headers như `<utility>` | Dùng xPack `riscv-none-elf-g++` hoặc toolchain bare-metal có libstdc++ |
+| TFLM image vượt 32 KB | `split_hex.py` báo firmware larger than memory hoặc link fail | Giữ BRAM/linker/splitter ở 128 KB: `BRAM_AW_WORDS=15`, `LENGTH=0x20000`, `WORDS=32768` |
 
 ## 9. Tham chiếu nhanh các artifact bên ngoài project
 
@@ -487,6 +555,8 @@ Nếu cả 3 pass thì project state intact.
 | `/home/duydonv/de2i_150_test/` | Project PicoRV32 cũ — mượn UART/LCD module + pin map |
 | `/home/duydonv/altera_lite/25.1std/quartus/bin/` | Quartus binaries |
 | `/home/duydonv/altera_lite/25.1std/questa_fse/bin/` | Questa binaries (vlog, vsim, vlib) |
+| `/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/` | C++ bare-metal toolchain khuyến nghị để build `tflm_hello` lâu dài |
+| `/home/duydonv/src/tflite-micro/` | Optional upstream TFLM clone, chỉ cần khi regenerate/update `third_party/tflm_tree` |
 
 ## 10. OpenHW community context
 

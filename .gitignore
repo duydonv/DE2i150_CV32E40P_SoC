@@ -31,6 +31,10 @@ firmware/*.map
 firmware/*.lst
 firmware/*.o
 firmware/*.d
+firmware/build/
+
+# Generated third-party source trees
+third_party/tflm_tree/
 
 # Editor/OS noise
 .DS_Store

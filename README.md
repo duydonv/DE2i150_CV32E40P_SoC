@@ -7,12 +7,12 @@ sister project to the already-working PicoRV32 bring-up in
 SDC, byte-lane BRAM, RISC-V GCC toolchain, `$readmemh` init).
 
 The first milestone was **just blinking LEDs**. The current firmware now has
-two board modes: a PULP smoke test and a UART benchmark suite that maps the
-earlier gem5 AI-extension prototype onto the CORE-V instructions already
-present in CV32E40P: `cv.mac`, `cv.sdotsp.b`, `cv.max`, `cv.clipur`,
-`cv.lw` post-increment, and `cv.setup`.
+smoke, benchmark, tiny INT8 inference, and first TensorFlow Lite Micro bring-up
+modes. These map the earlier gem5 AI-extension prototype onto the CORE-V
+instructions already present in CV32E40P: `cv.mac`, `cv.sdotsp.b`, `cv.max`,
+`cv.clipur`, `cv.lw` post-increment, and `cv.setup`.
 
-Current status as of 2026-06-02:
+Current status as of 2026-06-03:
 
 - `COREV_PULP=1`, `FPU=0`, `COREV_CLUSTER=0`.
 - `FPGA_TIMING_MODE=1` is enabled in the local core copy to close 50 MHz
@@ -21,6 +21,11 @@ Current status as of 2026-06-02:
   loop test stays word-aligned while benchmark code can read CSR counters.
 - LEDG0 heartbeat, UART TX output, and the 3-row benchmark report have been
   verified on the DE2i-150 board.
+- `tiny_ai` runs an exported 8x8 quadrant MLP and has been verified on the
+  board with matching baseline/custom classes and 7.09x speedup.
+- `tflm_hello` builds and runs the official TFLM `hello_world` int8 model on
+  bare metal. The 128 KB BRAM image full-compiles to `.sof`, and the board
+  UART run passes with checksum `0x3a357ded`.
 - Questa RTL simulation now generates per-kernel VCD files for Quartus Power
   Analyzer; see `sim/README.md`.
 - The sister gem5 prototype has been semantically aligned to this board
@@ -49,12 +54,23 @@ de2i150_cv32e40p_soc/
 │   ├── ai_ops.h                      <- CORE-V/PULP .insn wrappers
 │   ├── main.c                        <- PULP smoke test, LED pass/fail
 │   ├── benchmark.c                   <- baseline-vs-CORE-V UART benchmark
+│   ├── tiny_ai.c                      <- exported tiny int8 MLP, pre-TFLM
+│   ├── tiny_ai_model.h                <- generated model weights/input data
+│   ├── tflm_hello.cc                  <- first TFLM hello_world firmware
+│   ├── tflm_port.cc                   <- TFLM target hooks for this SoC
+│   ├── tflm_kernel_util_shim.cc       <- small generated-tree compatibility shim
+│   ├── tflm_sources_minimal.txt       <- minimal TFLM source list
+│   ├── generate_tflm_tree.sh          <- regenerate ignored TFLM tree
 │   ├── BENCHMARKS.md                  <- benchmark groups, UART output, LED codes
+│   ├── TINY_AI.md                     <- tiny int8 MLP notes and board result
+│   ├── TFLM.md                        <- TFLM bring-up notes
 │   ├── perf.h                        <- CSR, LED, UART helpers
 │   ├── start.s                       <- RV32 crt0
-│   ├── sections.lds                  <- linker script (32 KB RAM at 0x0)
+│   ├── sections.lds                  <- linker script (128 KB RAM at 0x0)
 │   ├── split_hex.py                  <- turn firmware.bin into 4 byte-lanes
 │   └── Makefile                      <- riscv64-unknown-elf, rv32im_zicsr
+├── third_party/
+│   └── tflm_tree/                    <- generated TFLM source tree, ignored by git
 ├── sim/
 │   ├── power_tb.sv                    <- Questa testbench for power VCD windows
 │   ├── run_power_vcd.sh               <- build/run one or all VCD scenarios
@@ -132,12 +148,12 @@ local BRAM and small MMIO devices:
 - BRAM, LED, and UART status reads accept in one cycle.
 - UART TX writes hold `data_gnt` low while the transmit shifter is busy.
 - `rvalid` pulses one clock later for both reads and writes
-- `data_req` is address-decoded into: (a) the 32 KB BRAM, (b) UART status
+- `data_req` is address-decoded into: (a) the 128 KB BRAM, (b) UART status
   at `0x0200_0000`, (c) UART TX byte write at `0x0200_0004`, (d) the LED
   MMIO register at `0x0300_0000`, or (e) a "grant-and-ignore" fall-through
   so the LSU never livelocks on a mis-typed pointer.
 
-The BRAM is split into four 8-bit byte-lanes with `(* ramstyle = "M9K" *)`
+The 128 KB BRAM is split into four 8-bit byte-lanes with `(* ramstyle = "M9K" *)`
 (same trick as the PicoRV32 project) so Quartus's inference does not fall
 back to MLABs or logic. Instruction fetch uses port A (read only), data
 LSU uses port B (R/W). Firmware is initialised from four
@@ -277,11 +293,12 @@ Every time you edit firmware you must **re-run `make`** and then
 **re-compile the Quartus project** (the `$readmemh` files are only
 consumed at synthesis time — there is no runtime loader).
 
-Two firmware modes are now available:
+Firmware modes currently available:
 
 ```bash
 make smoke       # default pass/fail smoke test on LEDR[7:0]
 make benchmark   # baseline-vs-CORE-V/PULP performance benchmark
+make tiny_ai     # exported tiny INT8 MLP, baseline vs CORE-V/PULP
 ```
 
 The benchmark firmware measures `mcycle` and `minstret` for three groups:
@@ -289,6 +306,18 @@ The benchmark firmware measures `mcycle` and `minstret` for three groups:
 `Dot4_acc + Clamp + p.lw + lp.setup`. Exact results are printed as a
 fixed-width table over the board DB9 RS-232 UART at 115200 8N1.
 `LEDR[7:0]` is only a compact status code; see `firmware/BENCHMARKS.md`.
+
+The first TensorFlow Lite Micro mode needs a bare-metal C++ toolchain with
+libstdc++ headers. The local Ubuntu `riscv64-unknown-elf-g++` package is not
+enough for this. Use xPack GNU RISC-V Embedded GCC outside the repo; the
+verified persistent location is under `/home/duydonv/tools`:
+
+```bash
+make tflm_hello CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+```
+
+See `firmware/TFLM.md` for the toolchain download, generated TFLM source-tree
+notes, board UART result, and current linked size.
 
 ## Current AI/PULP instruction mapping
 
@@ -338,22 +367,28 @@ For example, a three-instruction loop body uses raw immediate `4`. The
   `0x01` during init, `0x11` during the MAC/Clamp pair, `0x12` during the
   Dot4/Clamp pair, `0x13` during the Dot4/p.lw/lp.setup/Clamp pair,
   `0xA5` if all three groups pass, or a fail mask based at `0xE0`.
+- With `tiny_ai` firmware, **UART TX** prints the tiny MLP baseline/custom
+  classes, checksum, cycles/sample, and 8/8 accuracy.
+- With `tflm_hello` firmware, **UART TX** prints the TFLM model size, tensor
+  arena size, fixed int8 inputs, output vector, checksum, and runtime pass/fail
+  status. The first milestone uses fixed firmware inputs; UART RX streaming is
+  intentionally deferred.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status
 
-With `COREV_PULP=1`, `FPU=0`, UART TX enabled, and the benchmark firmware:
+With `COREV_PULP=1`, `FPU=0`, UART TX enabled, 128 KB local BRAM, and the
+`tflm_hello` firmware hex:
 
 - Full Quartus compile passes and produces
   `output_files/de2i150_cv32e40p_top.sof`.
 - Post-fit resources from `output_files/de2i150_cv32e40p_top.fit.summary`:
-  12,884 logic elements, 2,602 registers, 524,288 memory bits, and 16
+  13,109 logic elements, 2,614 registers, 2,097,152 memory bits, and 16
   embedded 9-bit multiplier elements.
 - Timing is closed for the 50 MHz board clock with `FPGA_TIMING_MODE=1`.
   On the slow 1200 mV 85C model:
-  - Fmax: 50.08 MHz
-  - Worst setup slack: +0.033 ns
-  - Worst hold slack: +0.373 ns
+  - Worst setup slack: +0.337 ns
+  - Worst hold slack: +0.374 ns
 
 The QSF uses `PLACEMENT_EFFORT_MULTIPLIER=4.0`; with `3.0`, this design
 placed successfully but missed slow-85C setup by about 0.2 ns.
@@ -374,11 +409,14 @@ placed successfully but missed slow-85C setup by about 0.2 ns.
    replacement for measured kit results.
 5. Install or build a CORE-V-aware toolchain so firmware can use CORE-V
    mnemonics or builtins instead of raw `.insn`.
-6. UART TX output is now present at 115200 8N1. UART RX command handling can
+6. `tiny_ai` is the current pre-TFLM model-shaped reference. `tflm_hello`
+   now proves the C++ TFLM runtime can link, full-compile, and run on this SoC.
+   The next step is a tiny `.tflite` MLP with reference TFLM kernels.
+7. UART TX output is now present at 115200 8N1. UART RX command handling can
    be added later if runtime interaction is useful.
-7. Add a scratch LCD output mirror later if the board demo needs standalone
+8. Add a scratch LCD output mirror later if the board demo needs standalone
    display without a laptop.
-8. Only after resource/performance/power data is available, decide whether to keep
+9. Only after resource/performance/power data is available, decide whether to keep
    full `COREV_PULP=1` or turn PULP off and re-implement a smaller custom
    subset. The risky parts of a custom subset are `cv.setup` and `cv.lw`
    post-increment, because they touch PC/control-flow, LSU, and register

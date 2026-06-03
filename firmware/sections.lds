@@ -1,7 +1,7 @@
 ENTRY(_start)
 
 MEMORY {
-    RAM (xrw) : ORIGIN = 0x00000000, LENGTH = 0x8000
+    RAM (xrw) : ORIGIN = 0x00000000, LENGTH = 0x20000
 }
 
 SECTIONS {

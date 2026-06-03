@@ -2,7 +2,7 @@
 //
 // Contents:
 //   * cv32e40p_top (FPU=0, COREV_PULP=1, COREV_CLUSTER=0)
-//   * 32 KB on-chip BRAM, dual-port, split into 4 byte lanes for M9K inference
+//   * 128 KB on-chip BRAM, dual-port, split into 4 byte lanes for M9K inference
 //   * OBI <-> BRAM/MMIO shim (1-cycle RAM latency, UART can back-pressure)
 //   * UART TX-only MMIO at 0x0200_0000 / 0x0200_0004 (115200 8N1)
 //   * 18-bit MMIO LED register at 0x0300_0000
@@ -27,7 +27,7 @@ module de2i150_cv32e40p_top (
     // ------------------------------------------------------------------
     // Parameters
     // ------------------------------------------------------------------
-    localparam integer BRAM_AW_WORDS = 13;                   // 8192 words = 32 KB
+    localparam integer BRAM_AW_WORDS = 15;                   // 32768 words = 128 KB
     localparam integer BRAM_SIZE_B   = (1 << BRAM_AW_WORDS) * 4;
     localparam integer UART_CLKS_PER_BIT = 434;              // 50 MHz / 115200 baud
     localparam [31:0]  UART_STATUS_ADDR = 32'h0200_0000;
@@ -130,7 +130,7 @@ module de2i150_cv32e40p_top (
 
     // ------------------------------------------------------------------
     // Address decode (data port)
-    //   RAM: data_addr < 32 KB
+    //   RAM: data_addr < BRAM_SIZE_B
     //   UART_STATUS: bit 0 is TX-ready
     //   UART_TX: write byte 0 to transmit one character
     //   LED: data_addr == 0x0300_0000 (low byte is the visible status code)
@@ -193,7 +193,7 @@ module de2i150_cv32e40p_top (
     assign data_rvalid  = data_rvalid_q;
 
     // ------------------------------------------------------------------
-    // 32 KB on-chip BRAM, true dual-port, 4 byte lanes (M9K-friendly)
+    // 128 KB on-chip BRAM, true dual-port, 4 byte lanes (M9K-friendly)
     //   Port A (read only) : instruction fetch
     //   Port B (R/W)       : data load/store
     // ------------------------------------------------------------------
