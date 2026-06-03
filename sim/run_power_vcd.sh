@@ -17,12 +17,14 @@ BUILT_POWER_FIRMWARE=0
 REQUESTED=()
 
 SCENARIOS=(
-    "mac_clamp_baseline|1|0"
-    "mac_clamp_custom|1|1"
-    "dot4_acc_clamp_baseline|2|0"
-    "dot4_acc_clamp_custom|2|1"
-    "dot4_plw_lp_clamp_baseline|3|0"
-    "dot4_plw_lp_clamp_custom|3|1"
+    "mac_clamp_baseline|benchmark|1|0"
+    "mac_clamp_custom|benchmark|1|1"
+    "dot4_acc_clamp_baseline|benchmark|2|0"
+    "dot4_acc_clamp_custom|benchmark|2|1"
+    "dot4_plw_lp_clamp_baseline|benchmark|3|0"
+    "dot4_plw_lp_clamp_custom|benchmark|3|1"
+    "tiny_ai_baseline|tiny_ai|0|0"
+    "tiny_ai_custom|tiny_ai|0|1"
 )
 
 RTL_FILES=(
@@ -80,7 +82,7 @@ EOF
 
 list_scenarios() {
     for entry in "${SCENARIOS[@]}"; do
-        IFS='|' read -r name _bench _variant <<< "$entry"
+        IFS='|' read -r name _program _bench _variant <<< "$entry"
         printf '%s\n' "$name"
     done
 }
@@ -100,15 +102,19 @@ compile_rtl() {
 }
 
 build_power_firmware() {
-    local bench_id="$1"
-    local variant="$2"
+    local program="$1"
+    local bench_id="$2"
+    local variant="$3"
     local defs
 
-    defs="-DPOWER_SIM -DPOWER_SIM_BENCH=$bench_id -DPOWER_SIM_VARIANT=$variant"
+    defs="-DPOWER_SIM -DPOWER_SIM_VARIANT=$variant"
+    if [[ "$program" == "benchmark" ]]; then
+        defs="$defs -DPOWER_SIM_BENCH=$bench_id"
+    fi
     defs="$defs -Wno-unused-function"
 
     "$MAKE_BIN" -C "$ROOT_DIR/firmware" \
-        PROGRAM=benchmark \
+        PROGRAM="$program" \
         EXTRA_CFLAGS="$defs" \
         clean all
 
@@ -124,12 +130,13 @@ restore_firmware() {
 
 run_one() {
     local name="$1"
-    local bench_id="$2"
-    local variant="$3"
+    local program="$2"
+    local bench_id="$3"
+    local variant="$4"
     local vcd_path="$VCD_DIR/${name}.vcd"
 
     printf '\n==> Building POWER_SIM firmware: %s\n' "$name"
-    build_power_firmware "$bench_id" "$variant"
+    build_power_firmware "$program" "$bench_id" "$variant"
 
     printf '==> Running Questa simulation: %s\n' "$name"
     cd "$BUILD_DIR"
@@ -146,9 +153,9 @@ find_scenario() {
     local entry
 
     for entry in "${SCENARIOS[@]}"; do
-        IFS='|' read -r name bench_id variant <<< "$entry"
+        IFS='|' read -r name program bench_id variant <<< "$entry"
         if [[ "$name" == "$wanted" ]]; then
-            printf '%s|%s|%s\n' "$name" "$bench_id" "$variant"
+            printf '%s|%s|%s|%s\n' "$name" "$program" "$bench_id" "$variant"
             return 0
         fi
     done
@@ -189,7 +196,7 @@ done
 
 if [[ "${#REQUESTED[@]}" -eq 0 ]]; then
     for entry in "${SCENARIOS[@]}"; do
-        IFS='|' read -r name _bench _variant <<< "$entry"
+        IFS='|' read -r name _program _bench _variant <<< "$entry"
         REQUESTED+=("$name")
     done
 fi
@@ -207,6 +214,6 @@ for wanted in "${REQUESTED[@]}"; do
         exit 2
     fi
 
-    IFS='|' read -r name bench_id variant <<< "$entry"
-    run_one "$name" "$bench_id" "$variant"
+    IFS='|' read -r name program bench_id variant <<< "$entry"
+    run_one "$name" "$program" "$bench_id" "$variant"
 done
