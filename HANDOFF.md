@@ -103,6 +103,12 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 - `tflm_hello` đã chạy pass trên kit: cycles `45149`, instret `32117`,
   cycles/invoke `11287`, checksum `0x3a357ded`, status `0x00000000`,
   outputs int8 `89 125 93 4`; xem `firmware/TFLM.md`.
+- Đã bắt đầu mốc kế tiếp `tflm_tiny_ai`: cùng tiny MLP 8x8 của `tiny_ai.c`
+  nhưng đóng gói thành TFLM flatbuffer và chạy bằng reference
+  `FullyConnected`. Model được sinh bởi
+  `firmware/generate_tflm_tiny_ai_model.cc` từ `tiny_ai_model.h`, không cần
+  TensorFlow Python/`flatc`. Đây là bước đúng-trước-nhanh-sau, chưa dùng
+  CORE-V/PULP optimized kernel.
 - UART RX vẫn chưa cần dùng ở mốc này. `tflm_hello` dùng fixed int8 inputs để
   khoanh vùng runtime TFLM trước; RX/loader/input streaming nên thêm sau khi
   TFLM reference chạy ổn trên board.
@@ -130,6 +136,11 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | TFLM `hello_world` int8 build | ✅ host-build | `firmware/tflm_hello.cc`, `firmware/TFLM.md`, local ignored `third_party/tflm_tree` |
 | Full compile 128 KB TFLM image | ✅ | `.sof` sinh tại `output_files/de2i150_cv32e40p_top.sof`; setup slack +0.337 ns |
 | TFLM `hello_world` board run | ✅ | UART checksum `0x3a357ded`, outputs `89 125 93 4`, pass yes |
+| TFLM tiny MLP reference build/full compile | ✅ | `firmware/tflm_tiny_ai.cc`, model 2288 B, firmware `dec=55916`, Quartus 0 errors |
+| TFLM tiny MLP reference board run | ✅ | UART checksum `0xc5f79430`, cycles `167327`, accuracy `8/8`, pass yes |
+| TFLM tiny MLP ref-vs-opt firmware build | ✅ | `pulp_opt` dùng `cv.sdotsp.b`, `cv.lw`, `cv.setup`, `cv.clipur`; firmware `dec=58788` |
+| TFLM tiny MLP ref-vs-opt full compile | ✅ | `.sof` mới tại `output_files/de2i150_cv32e40p_top.sof`; setup slack +0.337 ns |
+| TFLM tiny MLP ref-vs-opt board run | ✅ | ref `167507` cycles, opt `29620` cycles, speedup `5.66x`, checksum match |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |
@@ -327,6 +338,9 @@ de2i150_cv32e40p_soc/
 │   ├── tiny_ai_model.h                      <- generated tiny model/data
 │   ├── export_tiny_ai_model.py              <- export script for tiny model
 │   ├── tflm_hello.cc                        <- first TFLM hello_world firmware
+│   ├── tflm_tiny_ai.cc                      <- tiny MLP TFLM reference firmware
+│   ├── generate_tflm_tiny_ai_model.cc       <- host generator for tiny MLP flatbuffer
+│   ├── tflm_tiny_ai_model_data.{cc,h}       <- generated embedded tiny MLP model
 │   ├── tflm_port.cc                         <- TFLM target hooks
 │   ├── tflm_kernel_util_shim.cc             <- compatibility shim for generated tree
 │   ├── tflm_sources_minimal.txt             <- minimal TFLM source list
@@ -481,9 +495,35 @@ Power-analysis flow hiện tại:
   `0x3a357ded`, outputs int8 `89 125 93 4`, status `0x00000000`, pass yes.
 - ✅ Đặt xPack toolchain vào `/home/duydonv/tools` và upstream TFLM clone vào
   `/home/duydonv/src/tflite-micro` để tránh phụ thuộc `/tmp`.
-- ⏳ Việc kế tiếp: chuyển sang model TFLM tiny MLP tương tự `tiny_ai.c` bằng
-  reference kernel trước. Tối ưu `FullyConnected` bằng `cv.sdotsp.b`,
-  `cv.lw`, `cv.setup` chỉ nên làm sau khi reference TFLM model đã pass.
+- ✅ Đã chuyển sang model TFLM tiny MLP tương tự `tiny_ai.c` bằng reference
+  kernel trước: firmware `tflm_tiny_ai`, model data sinh từ
+  `tiny_ai_model.h`, chỉ dùng builtin `FullyConnected`.
+- ✅ Build/link firmware pass với size `text=47048 data=292 bss=8576
+  dec=55916`, model flatbuffer `2288` byte.
+- ✅ Full Quartus compile pass cho image `tflm_tiny_ai`: `.sof` mới tại
+  `output_files/de2i150_cv32e40p_top.sof`, 0 errors, 84 warnings, slow-85C
+  setup slack `+0.337 ns`, hold slack `+0.374 ns`.
+- ✅ Board UART run cho `tflm_tiny_ai` đã pass trên kit: checksum
+  `0xc5f79430`, cycles `167327`, instret `118203`, cycles/sample `20915`,
+  cycles/MAC `19.22`, classes `0 0 1 1 2 2 3 3`, sample0 scores `40 0 0 0`,
+  accuracy `8/8`, pass yes.
+- ✅ Đã thêm ref-vs-opt fixed-sample path vào `tflm_tiny_ai`: `tflm_ref` chạy
+  official TFLM `FullyConnected`, `pulp_opt` dùng `cv.sdotsp.b`, `cv.lw`,
+  `cv.setup`, `cv.clipur`, và giữ TFLM requantization để target bit-exact
+  checksum `0xc5f79430`.
+- ✅ Build/link firmware ref-vs-opt pass với size `text=49880 data=292
+  bss=8616 dec=58788`.
+- ✅ Full Quartus compile pass cho image ref-vs-opt: `.sof` mới tại
+  `output_files/de2i150_cv32e40p_top.sof`, 0 errors, 84 warnings, slow-85C
+  setup slack `+0.337 ns`, hold slack `+0.374 ns`.
+- ✅ Board UART run cho image ref-vs-opt đã pass trên kit: `tflm_ref`
+  cycles `167507`, instret `118343`, cycles/MAC `19.24`; `pulp_opt`
+  cycles `29620`, instret `20864`, cycles/MAC `3.40`; checksum hai path đều
+  `0xc5f79430`; class/score mismatches `0`; accuracy `8/8`; speedup `5.66x`;
+  `Overall pass: yes`.
+- ⏭️ Kết quả opt đầu tiên đúng chức năng nhưng chưa tune sâu. Trước khi can
+  thiệp vào `third_party/tflm_tree`, nên tối ưu model-specific overhead trong
+  firmware/local kernel trước để kéo gần lại mốc pre-TFLM `tiny_ai.c` `7.09x`.
 
 ## 6. Cách verify mọi thứ vẫn work khi resume
 
@@ -499,6 +539,7 @@ grep -c "Quartus Lite" rtl/core/cv32e40p_*.sv rtl/core/include/cv32e40p_fpu_pkg.
 cd firmware && make smoke
 make tiny_ai
 make tflm_hello CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+make tflm_tiny_ai CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
 ls firmware_byte*.hex      # Phải có 4 file
 
 # 3. Synth thử hoặc full compile khi cần .sof mới
@@ -555,7 +596,7 @@ Nếu cả 3 pass thì project state intact.
 | `/home/duydonv/de2i_150_test/` | Project PicoRV32 cũ — mượn UART/LCD module + pin map |
 | `/home/duydonv/altera_lite/25.1std/quartus/bin/` | Quartus binaries |
 | `/home/duydonv/altera_lite/25.1std/questa_fse/bin/` | Questa binaries (vlog, vsim, vlib) |
-| `/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/` | C++ bare-metal toolchain khuyến nghị để build `tflm_hello` lâu dài |
+| `/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/` | C++ bare-metal toolchain khuyến nghị để build `tflm_hello`/`tflm_tiny_ai` lâu dài |
 | `/home/duydonv/src/tflite-micro/` | Optional upstream TFLM clone, chỉ cần khi regenerate/update `third_party/tflm_tree` |
 
 ## 10. OpenHW community context

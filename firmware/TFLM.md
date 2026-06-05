@@ -70,6 +70,13 @@ regenerated from this upstream clone when needed.
 The board-specific TFLM integration files are committed to this repository:
 
 - `firmware/tflm_hello.cc`: board firmware using the TFLM hello_world model.
+- `firmware/tflm_tiny_ai.cc`: board firmware using the tiny MLP model through
+  reference TFLM `FullyConnected`.
+- `firmware/generate_tflm_tiny_ai_model.cc`: host-side flatbuffer generator for
+  the tiny MLP model. It uses the existing `tiny_ai_model.h` weights/data and
+  the vendored TFLM schema, so it does not require TensorFlow Python or `flatc`.
+- `firmware/tflm_tiny_ai_model_data.{cc,h}`: generated tiny MLP flatbuffer
+  embedded as a C++ byte array.
 - `firmware/tflm_port.cc`: target hooks for logging/time/setup.
 - `firmware/tflm_kernel_util_shim.cc`: small compatibility shim needed by the
   generated tree used here.
@@ -131,8 +138,137 @@ The vendored tree in `third_party/tflm_tree` was generated from upstream
 TensorFlow Lite Micro with `create_tflm_tree.py -e hello_world`. The current
 TFLM source list is intentionally narrow and lives in
 `tflm_sources_minimal.txt`. It is sized for `hello_world` plus
+`FullyConnected`. The tiny MLP reference model also uses only
 `FullyConnected`. Add op source files only when the selected model actually
 needs them.
+
+## Tiny MLP Ref-vs-Opt Model
+
+The next TFLM milestone after `hello_world` is `tflm_tiny_ai`. It runs the same
+8x8 quadrant MLP shape as `tiny_ai.c`:
+
+```text
+64 int8 inputs -> FullyConnected 16 hidden -> ReLU -> FullyConnected 4 outputs
+```
+
+This firmware now contains two fixed-sample paths:
+
+- `tflm_ref`: official TFLM reference `FullyConnected`.
+- `pulp_opt`: local optimized MLP body using `cv.sdotsp.b`, `cv.lw`,
+  `cv.setup`, and `cv.clipur`.
+
+The optimized path keeps TFLM's `MultiplyByQuantizedMultiplier` requantization
+step so the first target is bit-exact score/checksum matching against the TFLM
+reference. UART RX streaming is intentionally deferred until this fixed-sample
+ref-vs-opt path has passed on the board.
+
+Build it with:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+make tflm_tiny_ai CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+```
+
+The build first compiles `generate_tflm_tiny_ai_model.cc` for the host, then
+regenerates `tflm_tiny_ai_model_data.cc/.h` from `tiny_ai_model.h`. This keeps
+the `.tflite` model source of truth aligned with the existing tiny C reference
+without requiring TensorFlow on the host.
+
+The TFLM quantization is set up to preserve the intended fixed-point shape:
+
+- input and weight tensors use scale `1`, zero point `0`.
+- the hidden tensor uses scale `512`, matching the first fixed shift.
+- the output tensor uses scale `65536` and zero point `-128`; firmware reports
+  scores as `output_int8 + 128`, so the visible scores are in `0..255`.
+
+Expected reference behavior is classification accuracy `8/8` with labels:
+
+```text
+0 0 1 1 2 2 3 3
+```
+
+The board UART reference checksum is `0xc5f79430`. The optimized path is
+expected to match this checksum exactly. Do not treat it as the same checksum as
+`tiny_ai.c`, because TFLM uses its own standard quantized rounding path.
+
+Current firmware build status for `tflm_tiny_ai` ref-vs-opt:
+
+```text
+Model bytes: 2288
+Firmware size: text=49880 data=292 bss=8616 dec=58788
+Optimized kernel: cv.sdotsp.b + cv.lw + cv.setup + cv.clipur
+Fixed-sample target checksum: 0xc5f79430
+SOF: output_files/de2i150_cv32e40p_top.sof
+Quartus: 0 errors, 84 warnings
+Post-fit resources: 13109 logic elements, 2614 registers, 2097152 memory bits, 16 DSP elements
+Timing slow 1200mV 85C: setup slack +0.337 ns, hold slack +0.374 ns
+Board UART run: pass, checksum 0xc5f79430, speedup 5.66x
+```
+
+Ref-vs-opt board UART result captured on the kit:
+
+```text
+DE2i-150 CV32E40P TFLM tiny INT8 MLP ref-vs-opt
+UART: 115200 8N1
+Clock: 50000000 Hz
+Model: 8x8 quadrant MLP int8 64 -> 16 -> 4
+Model bytes: 2288
+Tensor arena: 8192 bytes
+Samples: 8
+INT8 MACs: 8704
+Custom dot4 ops: 2176
+Optimized kernel: cv.sdotsp.b + cv.lw + cv.setup + cv.clipur
+
+Variant   Cycles    Instret  Cyc/sample  Cyc/MAC  Checksum    Status      Pass
+--------  --------  --------  ----------  -------  ----------  ----------  ----
+tflm_ref    167507    118343       20938   19.24  0xc5f79430  0x00000000  yes
+pulp_opt     29620     20864        3702    3.40  0xc5f79430  0x00000000  yes
+
+Expected labels: 0 0 1 1 2 2 3 3
+TFLM classes:    0 0 1 1 2 2 3 3
+Opt classes:     0 0 1 1 2 2 3 3
+Ref accuracy: 8/8
+Opt accuracy: 8/8
+Class mismatches: 0
+Score mismatches: 0
+Speedup: 5.66x
+Overall pass: yes
+Sample0 scores TFLM: 40 0 0 0
+Sample0 scores opt:  40 0 0 0
+```
+
+Last full-compile/board result for the reference-only `tflm_tiny_ai` image:
+
+```text
+Model bytes: 2288
+Firmware size: text=47048 data=292 bss=8576 dec=55916
+SOF: output_files/de2i150_cv32e40p_top.sof
+Quartus: 0 errors, 84 warnings
+Post-fit resources: 13109 logic elements, 2614 registers, 2097152 memory bits, 16 DSP elements
+Timing slow 1200mV 85C: setup slack +0.337 ns, hold slack +0.374 ns
+```
+
+Reference-only board UART result captured on the kit:
+
+```text
+DE2i-150 CV32E40P TFLM tiny INT8 MLP reference
+UART: 115200 8N1
+Clock: 50000000 Hz
+Model: 8x8 quadrant MLP int8 64 -> 16 -> 4
+Model bytes: 2288
+Tensor arena: 8192 bytes
+Samples: 8
+INT8 MACs: 8704
+
+Cycles    Instret  Cyc/sample  Cyc/MAC  Checksum    Status      Pass
+--------  --------  ----------  -------  ----------  ----------  ----
+  167327    118203       20915   19.22  0xc5f79430  0x00000000  yes
+
+Expected labels: 0 0 1 1 2 2 3 3
+TFLM classes:    0 0 1 1 2 2 3 3
+Accuracy: 8/8
+Sample0 scores: 40 0 0 0
+```
 
 ## Memory
 
@@ -197,6 +333,9 @@ I/O protocol debugging with TFLM runtime debugging.
 
 ## Next Step
 
-The next useful milestone is a tiny int8 MLP `.tflite` model shaped like
-`tiny_ai.c`, still using reference TFLM kernels, before optimizing the TFLM
-`FullyConnected` kernel with `cv.sdotsp.b`, `cv.lw`, and `cv.setup`.
+The ref-vs-opt `tflm_tiny_ai` firmware now builds, full-compiles, and passes on
+the board. The first optimized result is functionally correct but not yet fully
+tuned: `pulp_opt` is `5.66x` faster than `tflm_ref`, while the earlier
+pre-TFLM `tiny_ai.c` custom path reached `7.09x` versus its own C baseline.
+The next optimization pass should reduce model-specific overhead before moving
+the kernel into the vendored TFLM tree.
