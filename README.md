@@ -299,6 +299,8 @@ Firmware modes currently available:
 make smoke       # default pass/fail smoke test on LEDR[7:0]
 make benchmark   # baseline-vs-CORE-V/PULP performance benchmark
 make tiny_ai     # exported tiny INT8 MLP, baseline vs CORE-V/PULP
+make tflm_tiny_ai CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+                 # same tiny INT8 MLP as a TFLM reference model
 ```
 
 The benchmark firmware measures `mcycle` and `minstret` for three groups:
@@ -317,7 +319,7 @@ make tflm_hello CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-n
 ```
 
 See `firmware/TFLM.md` for the toolchain download, generated TFLM source-tree
-notes, board UART result, and current linked size.
+notes, board UART result, tiny MLP reference flow, and current linked size.
 
 ## Current AI/PULP instruction mapping
 
@@ -373,12 +375,21 @@ For example, a three-instruction loop body uses raw immediate `4`. The
   arena size, fixed int8 inputs, output vector, checksum, and runtime pass/fail
   status. The first milestone uses fixed firmware inputs; UART RX streaming is
   intentionally deferred.
+- With `tflm_tiny_ai` firmware, **UART TX** now prints a fixed-sample
+  ref-vs-opt report. `tflm_ref` uses official TFLM `FullyConnected`;
+  `pulp_opt` uses `cv.sdotsp.b`, `cv.lw`, `cv.setup`, and `cv.clipur` while
+  keeping TFLM requantization for bit-exact comparison. The last reference-only
+  board run passed with checksum `0xc5f79430`, cycles `167327`, instret
+  `118203`, and accuracy `8/8`; the new ref-vs-opt image builds and
+  full-compiles. Its board run passes with ref cycles `167507`, opt cycles
+  `29620`, checksum match `0xc5f79430`, zero class/score mismatches, and
+  speedup `5.66x`.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status
 
 With `COREV_PULP=1`, `FPU=0`, UART TX enabled, 128 KB local BRAM, and the
-`tflm_hello` firmware hex:
+current TFLM firmware hex:
 
 - Full Quartus compile passes and produces
   `output_files/de2i150_cv32e40p_top.sof`.
@@ -389,6 +400,19 @@ With `COREV_PULP=1`, `FPU=0`, UART TX enabled, 128 KB local BRAM, and the
   On the slow 1200 mV 85C model:
   - Worst setup slack: +0.337 ns
   - Worst hold slack: +0.374 ns
+
+The latest full-compiled `tflm_tiny_ai` reference-only firmware uses the same
+post-fit timing numbers. Its linked size was `text=47048 data=292 bss=8576
+dec=55916`, and the embedded model flatbuffer is 2288 bytes. On the kit, the
+UART run passed with checksum `0xc5f79430`, cycles `167327`, instret
+`118203`, cycles/sample `20915`, cycles/MAC `19.22`, and accuracy `8/8`.
+
+The current ref-vs-opt `tflm_tiny_ai` firmware builds with size `text=49880
+data=292 bss=8616 dec=58788`. It full-compiles with the same post-fit resource
+and timing numbers, producing `output_files/de2i150_cv32e40p_top.sof`. On the
+kit, `tflm_ref` takes `167507` cycles and `pulp_opt` takes `29620` cycles,
+for `5.66x` speedup with identical checksum `0xc5f79430` and `Overall pass:
+yes`.
 
 The QSF uses `PLACEMENT_EFFORT_MULTIPLIER=4.0`; with `3.0`, this design
 placed successfully but missed slow-85C setup by about 0.2 ns.
@@ -409,9 +433,11 @@ placed successfully but missed slow-85C setup by about 0.2 ns.
    replacement for measured kit results.
 5. Install or build a CORE-V-aware toolchain so firmware can use CORE-V
    mnemonics or builtins instead of raw `.insn`.
-6. `tiny_ai` is the current pre-TFLM model-shaped reference. `tflm_hello`
-   now proves the C++ TFLM runtime can link, full-compile, and run on this SoC.
-   The next step is a tiny `.tflite` MLP with reference TFLM kernels.
+6. `tiny_ai` is the pre-TFLM model-shaped reference. `tflm_hello` proves the
+   C++ TFLM runtime can link, full-compile, and run on this SoC. The next
+   TFLM milestone is `tflm_tiny_ai`: the same tiny `.tflite` MLP with
+   reference TFLM `FullyConnected`, before replacing that kernel with the
+   CORE-V/PULP dot4 streaming path.
 7. UART TX output is now present at 115200 8N1. UART RX command handling can
    be added later if runtime interaction is useful.
 8. Add a scratch LCD output mirror later if the board demo needs standalone
