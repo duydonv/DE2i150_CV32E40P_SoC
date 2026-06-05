@@ -1,4 +1,5 @@
 CROSS ?= riscv64-unknown-elf-
+HOST_CXX ?= g++
 
 CC      := $(CROSS)gcc
 CXX     := $(CROSS)g++
@@ -33,8 +34,12 @@ else ifeq ($(PROGRAM),tflm_hello)
 MAIN_SRC := tflm_hello.cc
 OPT_FLAGS := -Os
 PROGRAM_KIND := tflm
+else ifeq ($(PROGRAM),tflm_tiny_ai)
+MAIN_SRC := tflm_tiny_ai.cc
+OPT_FLAGS := -Os
+PROGRAM_KIND := tflm
 else
-$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke, PROGRAM=benchmark, PROGRAM=tiny_ai, or PROGRAM=tflm_hello)
+$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke, PROGRAM=benchmark, PROGRAM=tiny_ai, PROGRAM=tflm_hello, or PROGRAM=tflm_tiny_ai)
 endif
 
 EXTRA_CFLAGS ?=
@@ -43,8 +48,7 @@ CFLAGS := $(OPT_FLAGS) $(COMMON_CFLAGS) $(EXTRA_CFLAGS)
 TFLM_TREE ?= ../third_party/tflm_tree
 TFLM_SRC_LIST := tflm_sources_minimal.txt
 TFLM_OBJ_DIR := build/tflm
-TFLM_MODEL_SRC := $(TFLM_TREE)/examples/hello_world/models/hello_world_int8_model_data.cc
-TFLM_MODEL_HDR := $(TFLM_TREE)/examples/hello_world/models/hello_world_int8_model_data.h
+TFLM_HOST_DIR := build/host
 TFLM_INCLUDES := \
 	-I$(TFLM_TREE) \
 	-I$(TFLM_TREE)/third_party/flatbuffers/include \
@@ -59,7 +63,22 @@ TFLM_CXXFLAGS := $(OPT_FLAGS) $(ARCH_FLAGS) -std=c++17 -Wall -Wextra \
 	-DTF_LITE_STRIP_ERROR_STRINGS=1 -DTF_LITE_STATIC_MEMORY=1 \
 	-DNDEBUG $(EXTRA_CFLAGS) $(TFLM_INCLUDES)
 
-.PHONY: all clean smoke benchmark tiny_ai tflm_hello FORCE
+ifeq ($(PROGRAM),tflm_tiny_ai)
+TFLM_MODEL_SRC := tflm_tiny_ai_model_data.cc
+TFLM_MODEL_HDR := tflm_tiny_ai_model_data.h
+TFLM_MODEL_OBJ := $(TFLM_OBJ_DIR)/tflm_tiny_ai_model_data.o
+TFLM_EXTRA_DEPS := tiny_ai_model.h ai_ops.h
+else
+TFLM_MODEL_SRC := $(TFLM_TREE)/examples/hello_world/models/hello_world_int8_model_data.cc
+TFLM_MODEL_HDR := $(TFLM_TREE)/examples/hello_world/models/hello_world_int8_model_data.h
+TFLM_MODEL_OBJ := $(TFLM_OBJ_DIR)/hello_world_int8_model_data.o
+TFLM_EXTRA_DEPS :=
+endif
+
+TFLM_MAIN_OBJ := $(TFLM_OBJ_DIR)/$(MAIN_SRC:.cc=.o)
+TFLM_TINY_MODEL_GEN := $(TFLM_HOST_DIR)/generate_tflm_tiny_ai_model
+
+.PHONY: all clean smoke benchmark tiny_ai tflm_hello tflm_tiny_ai tflm_tiny_model FORCE
 
 all: firmware.hex firmware_byte0.hex firmware_byte1.hex firmware_byte2.hex firmware_byte3.hex
 
@@ -75,12 +94,29 @@ tiny_ai:
 tflm_hello:
 	$(MAKE) PROGRAM=tflm_hello clean all
 
+tflm_tiny_ai:
+	$(MAKE) PROGRAM=tflm_tiny_ai clean all
+
+tflm_tiny_model: tflm_tiny_ai_model_data.cc tflm_tiny_ai_model_data.h
+
 ifeq ($(PROGRAM_KIND),tflm)
 
 $(TFLM_OBJ_DIR):
 	mkdir -p $@
 
-$(TFLM_OBJ_DIR)/tflm_hello.o: tflm_hello.cc perf.h $(TFLM_MODEL_HDR) Makefile | $(TFLM_OBJ_DIR)
+$(TFLM_HOST_DIR):
+	mkdir -p $@
+
+$(TFLM_TINY_MODEL_GEN): generate_tflm_tiny_ai_model.cc tiny_ai_model.h Makefile | $(TFLM_HOST_DIR)
+	$(HOST_CXX) -std=c++17 -O2 -Wall -Wextra \
+		-I$(TFLM_TREE) \
+		-I$(TFLM_TREE)/third_party/flatbuffers/include \
+		$< -o $@
+
+tflm_tiny_ai_model_data.cc tflm_tiny_ai_model_data.h &: $(TFLM_TINY_MODEL_GEN) tiny_ai_model.h
+	$(TFLM_TINY_MODEL_GEN) .
+
+$(TFLM_MAIN_OBJ): $(MAIN_SRC) perf.h $(TFLM_MODEL_HDR) $(TFLM_EXTRA_DEPS) Makefile | $(TFLM_OBJ_DIR)
 	$(CXX) $(TFLM_CXXFLAGS) -c $< -o $@
 
 $(TFLM_OBJ_DIR)/tflm_port.o: tflm_port.cc perf.h Makefile | $(TFLM_OBJ_DIR)
@@ -89,7 +125,7 @@ $(TFLM_OBJ_DIR)/tflm_port.o: tflm_port.cc perf.h Makefile | $(TFLM_OBJ_DIR)
 $(TFLM_OBJ_DIR)/tflm_kernel_util_shim.o: tflm_kernel_util_shim.cc Makefile | $(TFLM_OBJ_DIR)
 	$(CXX) $(TFLM_CXXFLAGS) -c $< -o $@
 
-$(TFLM_OBJ_DIR)/hello_world_int8_model_data.o: $(TFLM_MODEL_SRC) $(TFLM_MODEL_HDR) Makefile | $(TFLM_OBJ_DIR)
+$(TFLM_MODEL_OBJ): $(TFLM_MODEL_SRC) $(TFLM_MODEL_HDR) Makefile | $(TFLM_OBJ_DIR)
 	$(CXX) $(TFLM_CXXFLAGS) -c $< -o $@
 
 $(TFLM_OBJ_DIR)/libtflm.a: $(TFLM_SRC_LIST) Makefile | $(TFLM_OBJ_DIR)
@@ -100,19 +136,19 @@ $(TFLM_OBJ_DIR)/libtflm.a: $(TFLM_SRC_LIST) Makefile | $(TFLM_OBJ_DIR)
 		$(AR) rcs $@ "$$obj" || exit 1; \
 	done < $<
 
-firmware.elf: FORCE start.s tflm_hello.cc tflm_port.cc tflm_kernel_util_shim.cc \
+firmware.elf: FORCE start.s $(MAIN_SRC) tflm_port.cc tflm_kernel_util_shim.cc \
 		$(TFLM_MODEL_SRC) $(TFLM_MODEL_HDR) \
-		$(TFLM_OBJ_DIR)/tflm_hello.o \
+		$(TFLM_MAIN_OBJ) \
 		$(TFLM_OBJ_DIR)/tflm_port.o \
 		$(TFLM_OBJ_DIR)/tflm_kernel_util_shim.o \
-		$(TFLM_OBJ_DIR)/hello_world_int8_model_data.o \
+		$(TFLM_MODEL_OBJ) \
 		$(TFLM_OBJ_DIR)/libtflm.a \
 		sections.lds Makefile
 	$(CXX) $(ARCH_FLAGS) $(TFLM_LDFLAGS) -o $@ start.s \
-		$(TFLM_OBJ_DIR)/tflm_hello.o \
+		$(TFLM_MAIN_OBJ) \
 		$(TFLM_OBJ_DIR)/tflm_port.o \
 		$(TFLM_OBJ_DIR)/tflm_kernel_util_shim.o \
-		$(TFLM_OBJ_DIR)/hello_world_int8_model_data.o \
+		$(TFLM_MODEL_OBJ) \
 		$(TFLM_OBJ_DIR)/libtflm.a -lm
 	$(SIZE) $@
 
