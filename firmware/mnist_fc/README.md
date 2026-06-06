@@ -54,6 +54,18 @@ Output: int8, shape [1, 10],  scale 0.26571762561798096,  zero_point 37
 The TFLite graph contains two INT8 `FULLY_CONNECTED` ops. Input, weights,
 hidden activation, and output are `int8`; biases are `int32`.
 
+Firmware status: `make tflm_mnist_fc` now embeds this flatbuffer and runs a
+32-sample fixed-vector ref-vs-opt report on the DE2i-150. The `pulp_opt` path
+uses the same TFLite model data rather than a duplicated hard-coded weight set.
+It currently uses `cv.sdotsp.b` dot4 plus TFLite-compatible per-channel
+requantization; `cv.lw`, `cv.setup`, and clamp-instruction tuning are deferred
+to the next tuning step now that the dot4 path is confirmed bit-exact on UART.
+
+Board status: the current ref-vs-opt image passes on the DE2i-150. The UART
+capture reports `tflm_ref` cycles `11172801`, `pulp_opt` cycles `5546172`,
+speedup `2.01x`, checksum `0x00cb95fc` on both paths, expected-class matches
+`32/32`, class mismatches `0`, score mismatches `0`, and `Overall pass: yes`.
+
 ## Files
 
 | File | Meaning |
@@ -64,4 +76,3 @@ hidden activation, and output are `int8`; biases are `int32`.
 | `mnist_fc_model_data.{cc,h}` | C byte array wrapping the `.tflite` model |
 | `mnist_fc_test_vectors.h` | First 32 quantized MNIST test samples and expected INT8 outputs |
 | `mnist_fc_metadata.json` | Accuracy, checksum, quantization, and training metadata |
-

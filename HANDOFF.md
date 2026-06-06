@@ -119,7 +119,12 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   full-INT8 `.tflite`, C byte array, metadata và 32 test vectors. Kết quả
   verify host: float accuracy `96.30%`, INT8 accuracy `96.28%` trên 10,000
   mẫu MNIST test, model size `28368` byte, checksum INT8 `0x7c33a8dc`.
-  Firmware/Quartus/board integration cho model này chưa làm.
+  Firmware `tflm_mnist_fc` đã chạy ref-vs-opt pass trên board: `tflm_ref` và
+  `pulp_opt` đều dùng cùng flatbuffer model, checksum `0x00cb95fc`, expected
+  class `32/32`, score mismatches `0`, speedup hiện tại `2.01x`. Bản này đã
+  sửa lỗi đọc constant tensor của TFLM Micro bằng cách lấy weight/bias trực
+  tiếp từ flatbuffer buffer. Đây là mốc đúng-trước-nhanh-sau; MNIST optimized
+  path hiện mới dùng `cv.sdotsp.b` dot4, chưa tune `cv.lw`/`cv.setup`/clamp.
 
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
@@ -152,6 +157,8 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | TFLM tiny MLP ref-vs-opt board run | ✅ | ref `167507` cycles, opt `29620` cycles, speedup `5.66x`, checksum match |
 | TFLM tiny MLP UART runtime-input firmware | ✅ board-pass | `firmware/tflm_tiny_uart.cc`, `firmware/tflm_tiny_uart_runner.py`; ping + 8 framed samples pass, speedup ~`5.61x` |
 | MNIST FC `784->32->10` INT8 host artifacts | ✅ host-verified | `firmware/mnist_fc/`; INT8 `.tflite` accuracy `96.28%`, model `28368` B, checksum `0x7c33a8dc` |
+| MNIST FC TFLM reference board run | ✅ board-pass | ref-only UART checksum `0x00cb95fc`, expected-class `32/32`, score mismatches `0`, cycles `11171144` |
+| MNIST FC ref-vs-opt firmware | ✅ board-pass | `firmware/tflm_mnist_fc.cc`; ref `11172801` cycles, opt `5546172` cycles, speedup `2.01x`, checksum `0x00cb95fc`, score mismatches `0`, firmware `dec=119972`, `.sof` checksum `0x0228A8CA` |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |
@@ -551,9 +558,31 @@ Power-analysis flow hiện tại:
   tái tạo. Graph có 2 op `FULLY_CONNECTED`; input/weight/hidden/output là
   INT8, bias INT32. Host verify INT8 accuracy `96.28%`, checksum
   `0x7c33a8dc`, 32-vector checksum `0x00cb95fc`.
-- ⏭️ Bước tiếp theo là thêm firmware target cho MNIST FC, trước hết chạy TFLM
-  reference với test vectors và UART RX frame 784 byte. Tối ưu `pulp_opt` sâu
-  nên làm sau khi shape lớn chạy ổn định và bit-exact với TFLM reference.
+- ✅ Board run reference-only của `tflm_mnist_fc` đã pass theo UART capture:
+  checksum `0x00cb95fc`, label matches `31/32`, expected-class `32/32`,
+  score mismatches `0`, cycles `11171144`, instret `7711381`.
+- ✅ Đã nâng `tflm_mnist_fc` lên ref-vs-opt fixed-vector: `tflm_ref` vẫn chạy
+  official TFLM `FullyConnected`; `pulp_opt` đọc weight/bias/scale/zero-point
+  từ cùng flatbuffer model, dùng `cv.sdotsp.b` dot4 và per-channel TFLite
+  requant. Lỗi setup trước đó (`0xe036`, cả ref/custom đều in 0) do dùng
+  `GetTensor()` để lấy constant tensor trong TFLM Micro; bản hiện tại đọc
+  weight/bias trực tiếp từ flatbuffer `Buffer`. Chưa dùng `cv.lw`/hardware loop
+  ở MNIST path để tránh rủi ro alignment của weight trong flatbuffer; đây là
+  phần tune tiếp theo sau mốc dot4 bit-exact.
+- ✅ Board UART run ref-vs-opt của `tflm_mnist_fc` đã pass: ref
+  `11172801` cycles / `7687374` instret, opt `5546172` cycles / `3433381`
+  instret, checksum hai path đều `0x00cb95fc`, label matches `31/32`,
+  expected-class `32/32`, class mismatches `0`, score mismatches `0`, speedup
+  `2.01x`, `Overall pass: yes`.
+- ✅ Build pass với xPack:
+  `text=105252 data=292 bss=14428 dec=119972`, `firmware.bin=105548` byte.
+  Full Quartus compile pass: 13,381 LE, 2,793 regs, 2,097,152 memory bits,
+  16 DSP; slow-85C setup slack `+0.256 ns`, hold `+0.375 ns`. Ref-vs-opt
+  `.sof` đã nạp thành công qua `USB-Blaster [1-2]`, programming checksum
+  `0x0228A8CA`.
+- ⏭️ Bước tiếp theo là thêm UART RX frame 784 byte cho MNIST input runtime
+  hoặc tối ưu tiếp kernel bằng `cv.lw`/`cv.setup`/clamp sau khi xử lý alignment
+  và signed clamp semantics.
 
 ## 6. Cách verify mọi thứ vẫn work khi resume
 

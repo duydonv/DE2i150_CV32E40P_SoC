@@ -26,10 +26,10 @@ Current status as of 2026-06-06:
 - `tflm_hello` builds and runs the official TFLM `hello_world` int8 model on
   bare metal. The 128 KB BRAM image full-compiles to `.sof`, and the board
   UART run passes with checksum `0x3a357ded`.
-- The next MNIST FC model artifacts have been prepared on the host:
-  `784 -> 32 -> 10` full-INT8 TFLite, 96.28% INT8 test accuracy, and C byte
-  array/test-vector exports under `firmware/mnist_fc/`. Firmware integration
-  for this larger model is the next step.
+- The MNIST FC `784 -> 32 -> 10` full-INT8 model now has fixed-vector
+  firmware integration. The first reference-only board run passed, and the
+  current `tflm_mnist_fc` image adds a `pulp_opt` path using `cv.sdotsp.b`
+  dot4 plus model-derived per-channel requantization.
 - Questa RTL simulation now generates per-kernel VCD files for Quartus Power
   Analyzer; see `sim/README.md`.
 - The sister gem5 prototype has been semantically aligned to this board
@@ -310,6 +310,8 @@ make tflm_tiny_ai CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv
                  # same tiny INT8 MLP as a TFLM reference model
 make tflm_tiny_uart CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
                  # tiny TFLM model with UART RX runtime input frames
+make tflm_mnist_fc CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+                 # MNIST 784->32->10 TFLM reference over fixed test vectors
 ```
 
 The benchmark firmware measures `mcycle` and `minstret` for three groups:
@@ -402,6 +404,17 @@ For example, a three-instruction loop body uses raw immediate `4`. The
   a repeated report, so host scripts can use a strict request/response loop.
   The board runner passes with one ping plus 8 inference frames, zero
   ref-vs-opt score mismatches, and about `5.61x` speedup on the small model.
+- With `tflm_mnist_fc` firmware, **UART TX** prints a fixed-vector MNIST FC
+  ref-vs-opt report for the host-trained `784 -> 32 -> 10` INT8 model.
+  `tflm_ref` uses official TFLM `FullyConnected`; `pulp_opt` reads the same
+  TFLite flatbuffer weights/biases and uses `cv.sdotsp.b` dot4 plus
+  per-channel TFLite requantization. The fixed-vector checksum is
+  `0x00cb95fc`, with 32/32 expected-class matches, 0 score mismatches, and
+  31/32 label matches for the first 32 MNIST test vectors. The current board
+  run passes with ref `11172801` cycles, opt `5546172` cycles, and `2.01x`
+  speedup. The MNIST optimized path currently does not use `cv.lw`,
+  `cv.setup`, or `cv.clipur`; those remain follow-up tuning now that the dot4
+  path is confirmed bit-exact.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status
@@ -431,6 +444,22 @@ and timing numbers, producing `output_files/de2i150_cv32e40p_top.sof`. On the
 kit, `tflm_ref` takes `167507` cycles and `pulp_opt` takes `29620` cycles,
 for `5.66x` speedup with identical checksum `0xc5f79430` and `Overall pass:
 yes`.
+
+The first `tflm_mnist_fc` reference-only board run passed over UART:
+checksum `0x00cb95fc`, expected-class matches `32/32`, score mismatches `0`,
+label matches `31/32`, and `tflm_ref` cycles `11171144`. The current
+ref-vs-opt firmware builds with size `text=105252 data=292 bss=14428
+dec=119972`; `firmware.bin` is 105,548 bytes and fits in the 128 KB BRAM.
+Full Quartus compile passed and produced
+`output_files/de2i150_cv32e40p_top.sof`; post-fit resources are 13,381 logic
+elements, 2,793 registers, 2,097,152 memory bits, and 16 embedded 9-bit
+multiplier elements. Slow 1200 mV 85C timing closed with setup slack
+`+0.256 ns` and hold slack `+0.375 ns`. The ref-vs-opt `.sof` was programmed
+successfully over USB-Blaster with programming checksum `0x0228A8CA`; UART
+report capture for this image passed: `tflm_ref` cycles `11172801`, instret
+`7687374`; `pulp_opt` cycles `5546172`, instret `3433381`; both paths produced
+checksum `0x00cb95fc`, expected-class `32/32`, score mismatches `0`, and
+`Overall pass: yes`.
 
 The QSF uses `PLACEMENT_EFFORT_MULTIPLIER=4.0`; with `3.0`, this design
 placed successfully but missed slow-85C setup by about 0.2 ns.
