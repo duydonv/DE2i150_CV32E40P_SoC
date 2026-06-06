@@ -1,7 +1,7 @@
 # HANDOFF — DE2i-150 + CV32E40P bring-up
 
 > Tài liệu bàn giao trạng thái dự án để bất kỳ agent / developer mới nào
-> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **03/06/2026**.
+> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **06/06/2026**.
 
 ## 1. Mục tiêu cuối cùng
 
@@ -114,6 +114,12 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   đưa RX vào TFLM small model theo request/response, không dùng TX report lặp.
   Mode này đã board-test pass; runtime input streaming cho model FC lớn nên
   dùng lại protocol đó.
+- Đã chuẩn bị artifact host cho mốc MNIST FC lớn hơn `784 -> 32 -> 10` tại
+  `firmware/mnist_fc/`: script train/quantize/verify TensorFlow, model
+  full-INT8 `.tflite`, C byte array, metadata và 32 test vectors. Kết quả
+  verify host: float accuracy `96.30%`, INT8 accuracy `96.28%` trên 10,000
+  mẫu MNIST test, model size `28368` byte, checksum INT8 `0x7c33a8dc`.
+  Firmware/Quartus/board integration cho model này chưa làm.
 
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
@@ -145,6 +151,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | TFLM tiny MLP ref-vs-opt full compile | ✅ | `.sof` mới tại `output_files/de2i150_cv32e40p_top.sof`; setup slack +0.337 ns |
 | TFLM tiny MLP ref-vs-opt board run | ✅ | ref `167507` cycles, opt `29620` cycles, speedup `5.66x`, checksum match |
 | TFLM tiny MLP UART runtime-input firmware | ✅ board-pass | `firmware/tflm_tiny_uart.cc`, `firmware/tflm_tiny_uart_runner.py`; ping + 8 framed samples pass, speedup ~`5.61x` |
+| MNIST FC `784->32->10` INT8 host artifacts | ✅ host-verified | `firmware/mnist_fc/`; INT8 `.tflite` accuracy `96.28%`, model `28368` B, checksum `0x7c33a8dc` |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |
@@ -538,9 +545,15 @@ Power-analysis flow hiện tại:
   host-build pass, firmware `text=49536 data=292 bss=8668 dec=58496`; board
   run pass với ping + 8 inference frames, classes `0 0 1 1 2 2 3 3`,
   `mismatches=0`, `rx_status=0x00000001`, speedup khoảng `5.61x`.
-- ⏭️ Kết quả opt đầu tiên đúng chức năng nhưng chưa tune sâu. Nên chuyển sang
-  model FC lớn hơn, ví dụ `784 -> 32 -> 10`, dùng lại request/response RX vừa
-  pass. Tối ưu kernel sâu nên làm sau khi shape lớn ổn định.
+- ✅ Đã chuẩn bị host artifact cho model MNIST FC `784 -> 32 -> 10`:
+  `firmware/mnist_fc/mnist_fc_int8.tflite` là source of truth, kèm
+  `mnist_fc_model_data.{cc,h}`, `mnist_fc_test_vectors.h`, metadata và script
+  tái tạo. Graph có 2 op `FULLY_CONNECTED`; input/weight/hidden/output là
+  INT8, bias INT32. Host verify INT8 accuracy `96.28%`, checksum
+  `0x7c33a8dc`, 32-vector checksum `0x00cb95fc`.
+- ⏭️ Bước tiếp theo là thêm firmware target cho MNIST FC, trước hết chạy TFLM
+  reference với test vectors và UART RX frame 784 byte. Tối ưu `pulp_opt` sâu
+  nên làm sau khi shape lớn chạy ổn định và bit-exact với TFLM reference.
 
 ## 6. Cách verify mọi thứ vẫn work khi resume
 

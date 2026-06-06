@@ -77,6 +77,10 @@ The board-specific TFLM integration files are committed to this repository:
   the vendored TFLM schema, so it does not require TensorFlow Python or `flatc`.
 - `firmware/tflm_tiny_ai_model_data.{cc,h}`: generated tiny MLP flatbuffer
   embedded as a C++ byte array.
+- `firmware/mnist_fc/`: host-trained MNIST `784 -> 32 -> 10` full-INT8 TFLite
+  artifacts for the next firmware milestone. It includes the reproducible
+  TensorFlow train/quantize/verify script, `.tflite`, C byte array, metadata,
+  and fixed test vectors.
 - `firmware/tflm_port.cc`: target hooks for logging/time/setup.
 - `firmware/tflm_kernel_util_shim.cc`: small compatibility shim needed by the
   generated tree used here.
@@ -436,8 +440,22 @@ model for runtime input validation before moving to the larger FC model.
 
 The ref-vs-opt `tflm_tiny_ai` firmware builds, full-compiles, and passes on the
 board, UART RX is verified independently, and `tflm_tiny_uart` now passes
-runtime-input board testing on the small model. The next milestone should move
-to a larger fully-connected model, e.g. `784 -> 32 -> 10`, reusing the same
-request/response protocol. Kernel tuning should wait until that larger shape is
-stable, because the tiny `64 -> 16 -> 4` model over-amplifies
+runtime-input board testing on the small model. Host artifacts for the larger
+MNIST fully-connected model are now prepared under `firmware/mnist_fc/`:
+
+```text
+Model: 784 -> 32 + ReLU -> 10
+INT8 TFLite accuracy: 96.28% (9628/10000)
+INT8 checksum: 0x7c33a8dc
+Test-vector checksum: 0x00cb95fc
+Model bytes: 28368
+Input quant: scale 0.003921568859368563, zero_point -128
+Output quant: scale 0.26571762561798096, zero_point 37
+```
+
+The next firmware milestone should add a MNIST FC target that embeds
+`mnist_fc_model_data.{cc,h}`, runs the TFLM reference path against the fixed
+test vectors first, then reuses the existing UART request/response protocol
+with 784-byte input frames. Kernel tuning should wait until that larger shape
+is stable, because the tiny `64 -> 16 -> 4` model over-amplifies
 setup/requantization/checksum overhead compared with the real workload.

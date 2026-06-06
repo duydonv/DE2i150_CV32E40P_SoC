@@ -12,7 +12,7 @@ modes. These map the earlier gem5 AI-extension prototype onto the CORE-V
 instructions already present in CV32E40P: `cv.mac`, `cv.sdotsp.b`, `cv.max`,
 `cv.clipur`, `cv.lw` post-increment, and `cv.setup`.
 
-Current status as of 2026-06-03:
+Current status as of 2026-06-06:
 
 - `COREV_PULP=1`, `FPU=0`, `COREV_CLUSTER=0`.
 - `FPGA_TIMING_MODE=1` is enabled in the local core copy to close 50 MHz
@@ -26,6 +26,10 @@ Current status as of 2026-06-03:
 - `tflm_hello` builds and runs the official TFLM `hello_world` int8 model on
   bare metal. The 128 KB BRAM image full-compiles to `.sof`, and the board
   UART run passes with checksum `0x3a357ded`.
+- The next MNIST FC model artifacts have been prepared on the host:
+  `784 -> 32 -> 10` full-INT8 TFLite, 96.28% INT8 test accuracy, and C byte
+  array/test-vector exports under `firmware/mnist_fc/`. Firmware integration
+  for this larger model is the next step.
 - Questa RTL simulation now generates per-kernel VCD files for Quartus Power
   Analyzer; see `sim/README.md`.
 - The sister gem5 prototype has been semantically aligned to this board
@@ -60,6 +64,8 @@ de2i150_cv32e40p_soc/
 │   ├── tflm_port.cc                   <- TFLM target hooks for this SoC
 │   ├── tflm_kernel_util_shim.cc       <- small generated-tree compatibility shim
 │   ├── tflm_sources_minimal.txt       <- minimal TFLM source list
+│   ├── mnist_fc/                       <- host-trained 784->32->10 INT8 TFLite
+│   │                                    artifacts for next firmware milestone
 │   ├── generate_tflm_tree.sh          <- regenerate ignored TFLM tree
 │   ├── BENCHMARKS.md                  <- benchmark groups, UART output, LED codes
 │   ├── TINY_AI.md                     <- tiny int8 MLP notes and board result
@@ -446,14 +452,13 @@ placed successfully but missed slow-85C setup by about 0.2 ns.
 5. Install or build a CORE-V-aware toolchain so firmware can use CORE-V
    mnemonics or builtins instead of raw `.insn`.
 6. `tiny_ai` is the pre-TFLM model-shaped reference. `tflm_hello` proves the
-   C++ TFLM runtime can link, full-compile, and run on this SoC. The next
-   TFLM milestone is `tflm_tiny_ai`: the same tiny `.tflite` MLP with
-   reference TFLM `FullyConnected`, before replacing that kernel with the
-   CORE-V/PULP dot4 streaming path.
+   C++ TFLM runtime can link, full-compile, and run on this SoC.
+   `tflm_tiny_ai` and `tflm_tiny_uart` now cover small-model ref-vs-opt and
+   UART runtime-input bring-up.
 7. UART TX output is present at 115200 8N1. UART RX MMIO, standalone
    `rx_smoke`, and `tflm_tiny_uart` request/response inference are present.
-   The larger FC model should reuse this protocol after the small model path is
-   verified on the board.
+   The larger MNIST FC model should reuse this protocol after adding the
+   firmware target for `firmware/mnist_fc/mnist_fc_int8.tflite`.
 8. Add a scratch LCD output mirror later if the board demo needs standalone
    display without a laptop.
 9. Only after resource/performance/power data is available, decide whether to keep
