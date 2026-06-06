@@ -42,8 +42,12 @@ else ifeq ($(PROGRAM),tflm_tiny_ai)
 MAIN_SRC := tflm_tiny_ai.cc
 OPT_FLAGS := -Os
 PROGRAM_KIND := tflm
+else ifeq ($(PROGRAM),tflm_tiny_uart)
+MAIN_SRC := tflm_tiny_uart.cc
+OPT_FLAGS := -Os
+PROGRAM_KIND := tflm
 else
-$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke, PROGRAM=benchmark, PROGRAM=tiny_ai, PROGRAM=rx_smoke, PROGRAM=tflm_hello, or PROGRAM=tflm_tiny_ai)
+$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke, PROGRAM=benchmark, PROGRAM=tiny_ai, PROGRAM=rx_smoke, PROGRAM=tflm_hello, PROGRAM=tflm_tiny_ai, or PROGRAM=tflm_tiny_uart)
 endif
 
 EXTRA_CFLAGS ?=
@@ -67,7 +71,7 @@ TFLM_CXXFLAGS := $(OPT_FLAGS) $(ARCH_FLAGS) -std=c++17 -Wall -Wextra \
 	-DTF_LITE_STRIP_ERROR_STRINGS=1 -DTF_LITE_STATIC_MEMORY=1 \
 	-DNDEBUG $(EXTRA_CFLAGS) $(TFLM_INCLUDES)
 
-ifeq ($(PROGRAM),tflm_tiny_ai)
+ifneq (,$(filter $(PROGRAM),tflm_tiny_ai tflm_tiny_uart))
 TFLM_MODEL_SRC := tflm_tiny_ai_model_data.cc
 TFLM_MODEL_HDR := tflm_tiny_ai_model_data.h
 TFLM_MODEL_OBJ := $(TFLM_OBJ_DIR)/tflm_tiny_ai_model_data.o
@@ -82,7 +86,7 @@ endif
 TFLM_MAIN_OBJ := $(TFLM_OBJ_DIR)/$(MAIN_SRC:.cc=.o)
 TFLM_TINY_MODEL_GEN := $(TFLM_HOST_DIR)/generate_tflm_tiny_ai_model
 
-.PHONY: all clean smoke benchmark tiny_ai rx_smoke tflm_hello tflm_tiny_ai tflm_tiny_model FORCE
+.PHONY: all clean smoke benchmark tiny_ai rx_smoke tflm_hello tflm_tiny_ai tflm_tiny_uart tflm_tiny_model FORCE
 
 all: firmware.hex firmware_byte0.hex firmware_byte1.hex firmware_byte2.hex firmware_byte3.hex
 
@@ -103,6 +107,9 @@ tflm_hello:
 
 tflm_tiny_ai:
 	$(MAKE) PROGRAM=tflm_tiny_ai clean all
+
+tflm_tiny_uart:
+	$(MAKE) PROGRAM=tflm_tiny_uart clean all
 
 tflm_tiny_model: tflm_tiny_ai_model_data.cc tflm_tiny_ai_model_data.h
 
