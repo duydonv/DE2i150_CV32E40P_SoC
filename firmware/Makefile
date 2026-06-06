@@ -46,8 +46,12 @@ else ifeq ($(PROGRAM),tflm_tiny_uart)
 MAIN_SRC := tflm_tiny_uart.cc
 OPT_FLAGS := -Os
 PROGRAM_KIND := tflm
+else ifeq ($(PROGRAM),tflm_mnist_fc)
+MAIN_SRC := tflm_mnist_fc.cc
+OPT_FLAGS := -Os
+PROGRAM_KIND := tflm
 else
-$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke, PROGRAM=benchmark, PROGRAM=tiny_ai, PROGRAM=rx_smoke, PROGRAM=tflm_hello, PROGRAM=tflm_tiny_ai, or PROGRAM=tflm_tiny_uart)
+$(error Unknown PROGRAM '$(PROGRAM)'. Use PROGRAM=smoke, PROGRAM=benchmark, PROGRAM=tiny_ai, PROGRAM=rx_smoke, PROGRAM=tflm_hello, PROGRAM=tflm_tiny_ai, PROGRAM=tflm_tiny_uart, or PROGRAM=tflm_mnist_fc)
 endif
 
 EXTRA_CFLAGS ?=
@@ -76,6 +80,11 @@ TFLM_MODEL_SRC := tflm_tiny_ai_model_data.cc
 TFLM_MODEL_HDR := tflm_tiny_ai_model_data.h
 TFLM_MODEL_OBJ := $(TFLM_OBJ_DIR)/tflm_tiny_ai_model_data.o
 TFLM_EXTRA_DEPS := tiny_ai_model.h ai_ops.h
+else ifeq ($(PROGRAM),tflm_mnist_fc)
+TFLM_MODEL_SRC := mnist_fc/mnist_fc_model_data.cc
+TFLM_MODEL_HDR := mnist_fc/mnist_fc_model_data.h
+TFLM_MODEL_OBJ := $(TFLM_OBJ_DIR)/mnist_fc_model_data.o
+TFLM_EXTRA_DEPS := mnist_fc/mnist_fc_test_vectors.h
 else
 TFLM_MODEL_SRC := $(TFLM_TREE)/examples/hello_world/models/hello_world_int8_model_data.cc
 TFLM_MODEL_HDR := $(TFLM_TREE)/examples/hello_world/models/hello_world_int8_model_data.h
@@ -86,7 +95,7 @@ endif
 TFLM_MAIN_OBJ := $(TFLM_OBJ_DIR)/$(MAIN_SRC:.cc=.o)
 TFLM_TINY_MODEL_GEN := $(TFLM_HOST_DIR)/generate_tflm_tiny_ai_model
 
-.PHONY: all clean smoke benchmark tiny_ai rx_smoke tflm_hello tflm_tiny_ai tflm_tiny_uart tflm_tiny_model FORCE
+.PHONY: all clean smoke benchmark tiny_ai rx_smoke tflm_hello tflm_tiny_ai tflm_tiny_uart tflm_mnist_fc tflm_tiny_model FORCE
 
 all: firmware.hex firmware_byte0.hex firmware_byte1.hex firmware_byte2.hex firmware_byte3.hex
 
@@ -110,6 +119,9 @@ tflm_tiny_ai:
 
 tflm_tiny_uart:
 	$(MAKE) PROGRAM=tflm_tiny_uart clean all
+
+tflm_mnist_fc:
+	$(MAKE) PROGRAM=tflm_mnist_fc clean all
 
 tflm_tiny_model: tflm_tiny_ai_model_data.cc tflm_tiny_ai_model_data.h
 

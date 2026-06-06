@@ -453,9 +453,65 @@ Input quant: scale 0.003921568859368563, zero_point -128
 Output quant: scale 0.26571762561798096, zero_point 37
 ```
 
-The next firmware milestone should add a MNIST FC target that embeds
-`mnist_fc_model_data.{cc,h}`, runs the TFLM reference path against the fixed
-test vectors first, then reuses the existing UART request/response protocol
-with 784-byte input frames. Kernel tuning should wait until that larger shape
-is stable, because the tiny `64 -> 16 -> 4` model over-amplifies
-setup/requantization/checksum overhead compared with the real workload.
+The MNIST FC firmware target is `tflm_mnist_fc`. It embeds
+`mnist_fc_model_data.{cc,h}` and runs 32 fixed MNIST vectors in one report.
+`tflm_ref` uses official TFLM `FullyConnected`; `pulp_opt` reads the same
+flatbuffer weights, biases, scales, and zero-points after `AllocateTensors()`,
+then evaluates both FC layers with `cv.sdotsp.b` dot4 and per-channel TFLite
+requantization. There is no separate hard-coded weight set for the optimized
+path.
+
+The current board image reads constant weight/bias tensors directly from the
+TFLite flatbuffer `Buffer` objects. This avoids the TFLM Micro `GetTensor()`
+constant-buffer issue that produced setup status `0xe036` and zeroed
+ref-vs-opt outputs in an earlier image.
+
+The current MNIST optimized kernel deliberately packs 4 bytes in C before the
+dot4 instruction. This avoids assuming 32-bit alignment for weight buffers
+inside the TFLite flatbuffer. The UART report now proves bit-exact behavior, so
+the next optimization step can replace that packing loop with `cv.lw` and
+hardware loop setup where alignment is guaranteed or after copying/laying out
+weights safely.
+
+Build:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+make tflm_mnist_fc CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+```
+
+Current ref-vs-opt build/full-compile/program/board status:
+
+```text
+Firmware size: text=105252 data=292 bss=14428 dec=119972
+firmware.bin: 105548 bytes
+SOF: output_files/de2i150_cv32e40p_top.sof
+Quartus: 0 errors, 82 warnings
+Post-fit resources: 13381 logic elements, 2793 registers, 2097152 memory bits, 16 DSP elements
+Timing slow 1200mV 85C: setup slack +0.256 ns, hold slack +0.375 ns
+Programmer: USB-Blaster [1-2], configuration succeeded, SOF checksum 0x0228A8CA
+```
+
+The previous reference-only image was captured on the board and passed:
+checksum `0x00cb95fc`, label matches `31/32`, expected-class matches `32/32`,
+score mismatches `0`, cycles `11171144`, instret `7711381`.
+
+The current ref-vs-opt image was captured on the board and passed:
+
+```text
+tflm_ref: cycles 11172801, instret 7687374, cyc/sample 349150, cyc/MAC 13.74,
+          checksum 0x00cb95fc, status 0x00000000, pass yes
+pulp_opt: cycles 5546172, instret 3433381, cyc/sample 173317, cyc/MAC 6.82,
+          checksum 0x00cb95fc, status 0x00000000, pass yes
+Labels: 31/32 for both paths
+Expected-class matches: 32/32 for both paths
+Class mismatches: 0
+Score mismatches: 0
+Speedup: 2.01x
+Overall pass: yes
+```
+
+The next firmware step is either to reuse the existing request/response
+protocol with 784-byte input frames or to tune the optimized kernel further
+with `cv.lw`/`cv.setup`/clamp after the flatbuffer alignment and signed clamp
+semantics are handled.
