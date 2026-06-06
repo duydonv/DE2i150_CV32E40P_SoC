@@ -299,6 +299,7 @@ Firmware modes currently available:
 make smoke       # default pass/fail smoke test on LEDR[7:0]
 make benchmark   # baseline-vs-CORE-V/PULP performance benchmark
 make tiny_ai     # exported tiny INT8 MLP, baseline vs CORE-V/PULP
+make rx_smoke    # UART RX framed payload/checksum smoke test
 make tflm_tiny_ai CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
                  # same tiny INT8 MLP as a TFLM reference model
 ```
@@ -371,6 +372,9 @@ For example, a three-instruction loop body uses raw immediate `4`. The
   `0xA5` if all three groups pass, or a fail mask based at `0xE0`.
 - With `tiny_ai` firmware, **UART TX** prints the tiny MLP baseline/custom
   classes, checksum, cycles/sample, and 8/8 accuracy.
+- With `rx_smoke` firmware, **UART RX** accepts framed payloads at 115200 8N1
+  and **UART TX** prints one `OK`/`ERR` line per received frame. See
+  `firmware/UART_RX.md`.
 - With `tflm_hello` firmware, **UART TX** prints the TFLM model size, tensor
   arena size, fixed int8 inputs, output vector, checksum, and runtime pass/fail
   status. The first milestone uses fixed firmware inputs; UART RX streaming is
@@ -438,8 +442,9 @@ placed successfully but missed slow-85C setup by about 0.2 ns.
    TFLM milestone is `tflm_tiny_ai`: the same tiny `.tflite` MLP with
    reference TFLM `FullyConnected`, before replacing that kernel with the
    CORE-V/PULP dot4 streaming path.
-7. UART TX output is now present at 115200 8N1. UART RX command handling can
-   be added later if runtime interaction is useful.
+7. UART TX output is present at 115200 8N1. UART RX MMIO and the standalone
+   `rx_smoke` framed-payload test are also present; TFLM runtime input
+   streaming should build on that protocol after the larger FC model is stable.
 8. Add a scratch LCD output mirror later if the board demo needs standalone
    display without a laptop.
 9. Only after resource/performance/power data is available, decide whether to keep

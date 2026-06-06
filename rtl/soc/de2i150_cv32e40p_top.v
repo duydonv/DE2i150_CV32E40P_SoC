@@ -4,7 +4,7 @@
 //   * cv32e40p_top (FPU=0, COREV_PULP=1, COREV_CLUSTER=0)
 //   * 128 KB on-chip BRAM, dual-port, split into 4 byte lanes for M9K inference
 //   * OBI <-> BRAM/MMIO shim (1-cycle RAM latency, UART can back-pressure)
-//   * UART TX-only MMIO at 0x0200_0000 / 0x0200_0004 (115200 8N1)
+//   * UART TX/RX MMIO at 0x0200_0000 / 0x0200_0004 / 0x0200_0008 (115200 8N1)
 //   * 18-bit MMIO LED register at 0x0300_0000
 //   * reset synchroniser on KEY0, hardware heartbeat on LEDG0
 //
@@ -32,6 +32,7 @@ module de2i150_cv32e40p_top (
     localparam integer UART_CLKS_PER_BIT = 434;              // 50 MHz / 115200 baud
     localparam [31:0]  UART_STATUS_ADDR = 32'h0200_0000;
     localparam [31:0]  UART_TX_ADDR     = 32'h0200_0004;
+    localparam [31:0]  UART_RX_ADDR     = 32'h0200_0008;
     localparam [31:0]  LED_ADDR      = 32'h0300_0000;
     localparam [31:0]  BOOT_ADDR     = 32'h0000_0000;        // matches _start in sections.lds
     localparam [31:0]  MTVEC_ADDR    = 32'h0000_0040;        // exception vectors start 64 B in
@@ -131,8 +132,10 @@ module de2i150_cv32e40p_top (
     // ------------------------------------------------------------------
     // Address decode (data port)
     //   RAM: data_addr < BRAM_SIZE_B
-    //   UART_STATUS: bit 0 is TX-ready
+    //   UART_STATUS: bit 0 TX-ready, bit 1 RX-valid, bit 2 RX-overrun,
+    //                bit 3 RX-frame-error. Write bits 2/3 to clear errors.
     //   UART_TX: write byte 0 to transmit one character
+    //   UART_RX: read byte 0 to pop one received character
     //   LED: data_addr == 0x0300_0000 (low byte is the visible status code)
     //   Anything else: always grant + rvalid so the LSU does not stall
     //                  forever if firmware scribbles on an unmapped addr
@@ -140,10 +143,11 @@ module de2i150_cv32e40p_top (
     wire data_is_ram         = (data_addr < BRAM_SIZE_B);
     wire data_is_uart_status = (data_addr == UART_STATUS_ADDR);
     wire data_is_uart_tx     = (data_addr == UART_TX_ADDR);
+    wire data_is_uart_rx     = (data_addr == UART_RX_ADDR);
     wire data_is_led         = (data_addr == LED_ADDR);
 
     // ------------------------------------------------------------------
-    // UART TX-only peripheral.
+    // UART TX/RX peripheral.
     // ------------------------------------------------------------------
     wire uart_tx_ready;
     wire uart_tx_write = data_req && data_is_uart_tx && data_we && data_be[0];
@@ -160,8 +164,45 @@ module de2i150_cv32e40p_top (
         .tx        (uart_tx)
     );
 
-    // RX is intentionally unused for the first benchmark-output path.
-    wire unused_uart_rx = uart_rx;
+    wire [7:0] uart_rx_byte;
+    wire       uart_rx_byte_valid;
+    wire       uart_rx_frame_error_pulse;
+    wire [7:0] uart_rx_data;
+    wire       uart_rx_valid;
+    wire       uart_rx_overrun;
+    wire       uart_rx_frame_error;
+    wire       uart_rx_read = data_req && data_gnt && data_is_uart_rx && !data_we;
+    wire       uart_rx_pop  = uart_rx_read && uart_rx_valid;
+    wire       uart_status_clear = data_req && data_gnt && data_is_uart_status &&
+                                   data_we && data_be[0];
+
+    uart_rx_8n1 #(
+        .CLKS_PER_BIT(UART_CLKS_PER_BIT)
+    ) u_uart_rx (
+        .clk         (clk),
+        .rst_n       (rst_n),
+        .rx          (uart_rx),
+        .rx_valid    (uart_rx_byte_valid),
+        .rx_data     (uart_rx_byte),
+        .frame_error (uart_rx_frame_error_pulse)
+    );
+
+    uart_rx_fifo #(
+        .FIFO_AW(4)
+    ) u_uart_rx_fifo (
+        .clk               (clk),
+        .rst_n             (rst_n),
+        .push_valid        (uart_rx_byte_valid),
+        .push_data         (uart_rx_byte),
+        .pop               (uart_rx_pop),
+        .frame_error_pulse (uart_rx_frame_error_pulse),
+        .clear_overrun     (uart_status_clear && data_wdata[2]),
+        .clear_frame_error (uart_status_clear && data_wdata[3]),
+        .rdata             (uart_rx_data),
+        .valid             (uart_rx_valid),
+        .overrun           (uart_rx_overrun),
+        .frame_error       (uart_rx_frame_error)
+    );
 
     // ------------------------------------------------------------------
     // OBI handshake
@@ -176,17 +217,25 @@ module de2i150_cv32e40p_top (
     reg data_rvalid_q;
     reg data_was_led_q;
     reg data_was_uart_status_q;
+    reg data_was_uart_rx_q;
+    reg [31:0] data_rdata_uart_rx_q;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             instr_rvalid_q          <= 1'b0;
             data_rvalid_q           <= 1'b0;
             data_was_led_q          <= 1'b0;
             data_was_uart_status_q  <= 1'b0;
+            data_was_uart_rx_q      <= 1'b0;
+            data_rdata_uart_rx_q    <= 32'h0000_0000;
         end else begin
             instr_rvalid_q         <= instr_req & instr_gnt;
             data_rvalid_q          <= data_req  & data_gnt;
             data_was_led_q         <= data_req  & data_gnt & data_is_led;
             data_was_uart_status_q <= data_req  & data_gnt & data_is_uart_status;
+            data_was_uart_rx_q     <= data_req  & data_gnt & data_is_uart_rx;
+            if (uart_rx_read) begin
+                data_rdata_uart_rx_q <= {24'h000000, uart_rx_data};
+            end
         end
     end
     assign instr_rvalid = instr_rvalid_q;
@@ -254,7 +303,10 @@ module de2i150_cv32e40p_top (
     end
 
     assign data_rdata = data_was_led_q ? {14'b0, led_reg} :
-                        data_was_uart_status_q ? {31'b0, uart_tx_ready} :
+                        data_was_uart_status_q ? {28'b0, uart_rx_frame_error,
+                                                   uart_rx_overrun, uart_rx_valid,
+                                                   uart_tx_ready} :
+                        data_was_uart_rx_q ? data_rdata_uart_rx_q :
                         data_rdata_ram_q;
 
     // ------------------------------------------------------------------
@@ -267,6 +319,179 @@ module de2i150_cv32e40p_top (
 
     assign ledr = {10'b0, led_reg[7:0]};
     assign ledg = {core_sleep, hb_div[25]};
+
+endmodule
+
+module uart_rx_8n1 #(
+    parameter integer CLKS_PER_BIT = 434
+) (
+    input  wire       clk,
+    input  wire       rst_n,
+    input  wire       rx,
+    output reg        rx_valid,
+    output reg  [7:0] rx_data,
+    output reg        frame_error
+);
+
+    localparam [1:0] RX_IDLE  = 2'd0;
+    localparam [1:0] RX_START = 2'd1;
+    localparam [1:0] RX_DATA  = 2'd2;
+    localparam [1:0] RX_STOP  = 2'd3;
+    localparam integer HALF_CLKS_PER_BIT = CLKS_PER_BIT / 2;
+
+    reg       rx_meta;
+    reg       rx_sync;
+    reg [1:0] state;
+    reg [2:0] bit_index;
+    reg [7:0] shift;
+    reg [15:0] clk_count;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rx_meta     <= 1'b1;
+            rx_sync     <= 1'b1;
+            state       <= RX_IDLE;
+            bit_index   <= 3'd0;
+            shift       <= 8'h00;
+            clk_count   <= 16'd0;
+            rx_valid    <= 1'b0;
+            rx_data     <= 8'h00;
+            frame_error <= 1'b0;
+        end else begin
+            rx_meta     <= rx;
+            rx_sync     <= rx_meta;
+            rx_valid    <= 1'b0;
+            frame_error <= 1'b0;
+
+            case (state)
+                RX_IDLE: begin
+                    clk_count <= 16'd0;
+                    bit_index <= 3'd0;
+                    if (rx_sync == 1'b0) begin
+                        state <= RX_START;
+                    end
+                end
+
+                RX_START: begin
+                    if (clk_count == (HALF_CLKS_PER_BIT - 1)) begin
+                        clk_count <= 16'd0;
+                        if (rx_sync == 1'b0) begin
+                            state <= RX_DATA;
+                        end else begin
+                            state <= RX_IDLE;
+                        end
+                    end else begin
+                        clk_count <= clk_count + 16'd1;
+                    end
+                end
+
+                RX_DATA: begin
+                    if (clk_count == (CLKS_PER_BIT - 1)) begin
+                        clk_count        <= 16'd0;
+                        shift[bit_index] <= rx_sync;
+                        if (bit_index == 3'd7) begin
+                            state <= RX_STOP;
+                        end else begin
+                            bit_index <= bit_index + 3'd1;
+                        end
+                    end else begin
+                        clk_count <= clk_count + 16'd1;
+                    end
+                end
+
+                RX_STOP: begin
+                    if (clk_count == (CLKS_PER_BIT - 1)) begin
+                        clk_count <= 16'd0;
+                        if (rx_sync == 1'b1) begin
+                            rx_data  <= shift;
+                            rx_valid <= 1'b1;
+                        end else begin
+                            frame_error <= 1'b1;
+                        end
+                        state <= RX_IDLE;
+                    end else begin
+                        clk_count <= clk_count + 16'd1;
+                    end
+                end
+
+                default: begin
+                    state <= RX_IDLE;
+                end
+            endcase
+        end
+    end
+
+endmodule
+
+module uart_rx_fifo #(
+    parameter integer FIFO_AW = 4
+) (
+    input  wire       clk,
+    input  wire       rst_n,
+    input  wire       push_valid,
+    input  wire [7:0] push_data,
+    input  wire       pop,
+    input  wire       frame_error_pulse,
+    input  wire       clear_overrun,
+    input  wire       clear_frame_error,
+    output wire [7:0] rdata,
+    output wire       valid,
+    output reg        overrun,
+    output reg        frame_error
+);
+
+    localparam integer FIFO_DEPTH = (1 << FIFO_AW);
+    localparam [FIFO_AW:0] FIFO_DEPTH_COUNT = (1 << FIFO_AW);
+
+    (* ramstyle = "logic" *) reg [7:0] fifo [0:FIFO_DEPTH-1];
+    reg [FIFO_AW-1:0] rd_ptr;
+    reg [FIFO_AW-1:0] wr_ptr;
+    reg [FIFO_AW:0] count;
+
+    wire fifo_full = (count == FIFO_DEPTH_COUNT);
+    wire do_pop = pop && valid;
+    wire do_push = push_valid && (!fifo_full || do_pop);
+    wire push_overrun = push_valid && fifo_full && !do_pop;
+
+    assign valid = (count != 0);
+    assign rdata = fifo[rd_ptr];
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rd_ptr      <= {FIFO_AW{1'b0}};
+            wr_ptr      <= {FIFO_AW{1'b0}};
+            count       <= 0;
+            overrun     <= 1'b0;
+            frame_error <= 1'b0;
+        end else begin
+            if (clear_overrun) begin
+                overrun <= 1'b0;
+            end
+            if (clear_frame_error) begin
+                frame_error <= 1'b0;
+            end
+            if (push_overrun) begin
+                overrun <= 1'b1;
+            end
+            if (frame_error_pulse) begin
+                frame_error <= 1'b1;
+            end
+
+            if (do_push) begin
+                fifo[wr_ptr] <= push_data;
+                wr_ptr <= wr_ptr + 1'b1;
+            end
+            if (do_pop) begin
+                rd_ptr <= rd_ptr + 1'b1;
+            end
+
+            case ({do_push, do_pop})
+                2'b10: count <= count + 1'b1;
+                2'b01: count <= count - 1'b1;
+                default: count <= count;
+            endcase
+        end
+    end
 
 endmodule
 

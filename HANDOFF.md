@@ -92,7 +92,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   RISC-V Embedded GCC 14.2.0. Toolchain đã được đặt bền vững dưới
   `/home/duydonv/tools/xpack-riscv-none-elf-gcc/...`.
 - Upstream TFLM source clone đã được đặt ngoài repo SoC tại
-  `/home/duydonv/src/tflite-micro`, worktree sạch ở commit `ac1fae36`. Clone
+  `/home/duydonv/src/tflite-micro`, worktree sạch ở commit `ac1fae3`. Clone
   này chỉ cần khi regenerate/update `third_party/tflm_tree`.
 - Để TFLM fit, local BRAM/linker/splitter đã tăng từ 32 KB lên 128 KB:
   `BRAM_AW_WORDS=15`, `sections.lds LENGTH=0x20000`,
@@ -109,9 +109,10 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   `firmware/generate_tflm_tiny_ai_model.cc` từ `tiny_ai_model.h`, không cần
   TensorFlow Python/`flatc`. Đây là bước đúng-trước-nhanh-sau, chưa dùng
   CORE-V/PULP optimized kernel.
-- UART RX vẫn chưa cần dùng ở mốc này. `tflm_hello` dùng fixed int8 inputs để
-  khoanh vùng runtime TFLM trước; RX/loader/input streaming nên thêm sau khi
-  TFLM reference chạy ổn trên board.
+- UART RX hiện đã có peripheral/MMIO và smoke firmware riêng (`rx_smoke`) để
+  kiểm tra frame/checksum độc lập với TFLM. TFLM vẫn dùng fixed int8 inputs ở
+  các mốc hiện tại; runtime input streaming nên nối vào RX sau khi model FC lớn
+  ổn định.
 
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
@@ -124,6 +125,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | Reset synchronizer | ✅ | Cùng file trên |
 | MMIO LED tại `0x0300_0000` | ✅ | Cùng file trên |
 | UART TX MMIO tại `0x0200_0000/0x0200_0004` | ✅ | `rtl/soc/de2i150_cv32e40p_top.v`, `firmware/perf.h` |
+| UART RX MMIO + smoke test | ✅ | RX data `0x0200_0008`, status bits `RX_VALID/RX_OVERRUN/RX_FRAME_ERROR`, `firmware/rx_smoke.c`, `firmware/UART_RX.md`; runner/manual `picocom` pass |
 | Heartbeat trên `LEDG0`, `core_sleep` ra `LEDG1` | ✅ | Cùng file trên |
 | Firmware bare-metal LED shift (rv32imc) | ✅ | `firmware/{main.c, start.s, sections.lds, Makefile}` |
 | Enable `COREV_PULP=1` cho hwloop/post-increment/CORE-V ALU/MUL | ✅ | `rtl/soc/de2i150_cv32e40p_top.v` |
@@ -463,8 +465,12 @@ lệnh ALU thuần mà đụng đến control-flow, PC, LSU và register writeba
 UART TX đã được thêm trực tiếp vào SoC wrapper, dùng pin map từ
 `/home/duydonv/de2i_150_test/`:
 
-- UART TX 115200 8N1 qua DB9 RS-232 để in benchmark table.
-- UART RX hiện chưa dùng; nếu cần runtime command/loader thì thêm sau.
+- UART TX 115200 8N1 qua DB9 RS-232 để in benchmark/TFLM reports.
+- UART RX 115200 8N1 đã có MMIO `0x0200_0008` + FIFO 16 byte + sticky
+  overrun/frame-error status. `make rx_smoke` và `rx_smoke_runner.py` đã pass;
+  manual `picocom` hex-write frame cũng pass.
+- Runtime input streaming/loader cho TFLM nên dùng lại protocol RX này sau khi
+  model FC lớn ổn định.
 - LCD 1602 chỉ thêm nếu cần demo độc lập không dùng laptop.
 
 Power-analysis flow hiện tại:
@@ -521,9 +527,12 @@ Power-analysis flow hiện tại:
   cycles `29620`, instret `20864`, cycles/MAC `3.40`; checksum hai path đều
   `0xc5f79430`; class/score mismatches `0`; accuracy `8/8`; speedup `5.66x`;
   `Overall pass: yes`.
-- ⏭️ Kết quả opt đầu tiên đúng chức năng nhưng chưa tune sâu. Trước khi can
-  thiệp vào `third_party/tflm_tree`, nên tối ưu model-specific overhead trong
-  firmware/local kernel trước để kéo gần lại mốc pre-TFLM `tiny_ai.c` `7.09x`.
+- ✅ UART RX smoke test đã pass độc lập với TFLM: framed payload/checksum qua
+  `rx_smoke_runner.py` và manual `picocom` đều nhận `OK`, status
+  `0x00000001`.
+- ⏭️ Kết quả opt đầu tiên đúng chức năng nhưng chưa tune sâu. Nên chuyển sang
+  model FC lớn hơn trước, ví dụ `784 -> 32 -> 10`, rồi nối runtime input qua
+  RX. Tối ưu kernel sâu nên làm sau khi shape lớn ổn định.
 
 ## 6. Cách verify mọi thứ vẫn work khi resume
 

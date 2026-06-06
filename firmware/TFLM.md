@@ -58,7 +58,7 @@ The upstream TFLM clone is also kept outside the SoC repo:
 The clone was verified clean at commit:
 
 ```text
-ac1fae36
+ac1fae3
 ```
 
 Normal rebuilds of the current `tflm_hello` firmware use the generated tree at
@@ -105,14 +105,14 @@ cd /home/duydonv/de2i150_cv32e40p_soc/firmware
 The script uses:
 
 - `TFLM_SRC=/home/duydonv/src/tflite-micro`
-- expected upstream commit `ac1fae36`
+- expected upstream commit `ac1fae3`
 - output `third_party/tflm_tree`
 
 Manual regeneration is equivalent to:
 
 ```bash
 cd /home/duydonv/src/tflite-micro
-git checkout ac1fae36
+git checkout ac1fae3
 python3 tensorflow/lite/micro/tools/project_generation/create_tflm_tree.py -e hello_world /tmp/tflm-tree-riscv
 ```
 
@@ -159,8 +159,10 @@ This firmware now contains two fixed-sample paths:
 
 The optimized path keeps TFLM's `MultiplyByQuantizedMultiplier` requantization
 step so the first target is bit-exact score/checksum matching against the TFLM
-reference. UART RX streaming is intentionally deferred until this fixed-sample
-ref-vs-opt path has passed on the board.
+reference. The standalone UART RX smoke test now verifies byte transport
+separately; TFLM runtime input streaming should be added after the larger FC
+model shape is stable, so I/O protocol work does not obscure model/runtime
+changes.
 
 Build it with:
 
@@ -326,16 +328,29 @@ benchmark for a real AI task.
 
 ## UART RX
 
-The first TFLM milestone does not need UART RX. Inputs are fixed in firmware,
-matching the earlier benchmark bring-up style. UART RX should be added later
-only when runtime input streaming or a loader is needed; doing it now would mix
-I/O protocol debugging with TFLM runtime debugging.
+The first TFLM milestones intentionally used fixed firmware inputs, matching
+the earlier benchmark bring-up style. UART RX has now been added at the SoC
+MMIO level and verified separately with `rx_smoke`, not yet wired into TFLM
+inference:
+
+- status/TX/RX MMIO: `0x0200_0000`, `0x0200_0004`, `0x0200_0008`
+- RX status bits: `RX_VALID`, `RX_OVERRUN`, `RX_FRAME_ERROR`
+- RX FIFO depth: 16 bytes, implemented in logic
+- firmware smoke mode: `make rx_smoke`
+- host smoke script: `firmware/rx_smoke_runner.py`
+- manual terminal test: `picocom` hex-write frames
+
+The scripted soak test passed payload lengths `1,16,64,255,512` repeatedly with
+`status=0x00000001`, and manual `picocom` frame injection also passed. The next
+use of RX should be runtime input streaming for the larger FC model, while this
+small smoke firmware remains a regression test for the serial link itself.
 
 ## Next Step
 
-The ref-vs-opt `tflm_tiny_ai` firmware now builds, full-compiles, and passes on
-the board. The first optimized result is functionally correct but not yet fully
-tuned: `pulp_opt` is `5.66x` faster than `tflm_ref`, while the earlier
-pre-TFLM `tiny_ai.c` custom path reached `7.09x` versus its own C baseline.
-The next optimization pass should reduce model-specific overhead before moving
-the kernel into the vendored TFLM tree.
+The ref-vs-opt `tflm_tiny_ai` firmware builds, full-compiles, and passes on the
+board, and UART RX is now verified independently. The next main milestone should
+move to a larger fully-connected model, e.g. `784 -> 32 -> 10`, then connect the
+already-tested RX protocol to runtime input streaming. Kernel tuning should wait
+until that larger shape is stable, because the tiny `64 -> 16 -> 4` model
+over-amplifies setup/requantization/checksum overhead compared with the real
+workload.
