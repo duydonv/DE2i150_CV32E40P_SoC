@@ -159,10 +159,10 @@ This firmware now contains two fixed-sample paths:
 
 The optimized path keeps TFLM's `MultiplyByQuantizedMultiplier` requantization
 step so the first target is bit-exact score/checksum matching against the TFLM
-reference. The standalone UART RX smoke test now verifies byte transport
-separately; TFLM runtime input streaming should be added after the larger FC
-model shape is stable, so I/O protocol work does not obscure model/runtime
-changes.
+reference. The standalone UART RX smoke test verifies byte transport
+separately; `tflm_tiny_uart` then adds runtime input streaming to this small
+model first. This keeps protocol/debug flow stable before changing to the
+larger FC model shape.
 
 Build it with:
 
@@ -175,6 +175,93 @@ The build first compiles `generate_tflm_tiny_ai_model.cc` for the host, then
 regenerates `tflm_tiny_ai_model_data.cc/.h` from `tiny_ai_model.h`. This keeps
 the `.tflite` model source of truth aligned with the existing tiny C reference
 without requiring TensorFlow on the host.
+
+## Tiny MLP UART Runtime Input Mode
+
+`tflm_tiny_uart` is the first TFLM mode that consumes input over UART RX. It
+uses the same small model as `tflm_tiny_ai` and is intentionally separate from
+the fixed-sample benchmark firmware:
+
+- `tflm_tiny_ai`: runs the built-in 8 samples once, then repeatedly prints the
+  saved report.
+- `tflm_tiny_uart`: prints one banner, waits for one RX frame, runs one input
+  sample, prints one response, then waits for the next frame.
+
+This avoids mixing the old continuous TX report with a request/response host
+runner. The host must send only one frame at a time and wait for `OK`/`ERR`
+before sending the next frame.
+
+Build it with:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+make tflm_tiny_uart CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+```
+
+Current host build result:
+
+```text
+Model bytes: 2288
+Firmware size: text=49536 data=292 bss=8668 dec=58496
+```
+
+After rebuilding firmware, re-run Quartus compilation and program the `.sof`.
+Then run:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+python3 tflm_tiny_uart_runner.py /dev/ttyUSB0
+```
+
+Protocol:
+
+```text
+55 aa cmd len_lo len_hi payload checksum_le32
+```
+
+Commands:
+
+| Command | Payload | Meaning |
+|---:|---|---|
+| `0x10` | 0 bytes | ping, returns one `OK` line |
+| `0x11` | 64 bytes | run one int8 input sample through TFLM ref and `pulp_opt` |
+
+An inference response looks like:
+
+```text
+OK seq=2 cmd=0x11 len=64 pass=yes ref_cls=0 opt_cls=0 mismatches=0 ...
+```
+
+`pass=yes` requires matching TFLM/optimized class, score vector, and checksum.
+The default runner sends the same 8 quadrant samples used by the fixed firmware
+and checks the expected class labels on the host.
+
+Current board result:
+
+```text
+ping: OK seq=1 cmd=0x10
+infer: 8/8 frames pass, classes 0 0 1 1 2 2 3 3
+ref cycles: 20975..20976
+opt cycles: 3738..3739
+speedup: 5.61x
+rx_status: 0x00000001
+```
+
+LED status while running:
+
+| LEDR[7:0] | Meaning |
+|---|---|
+| `0x80` | init |
+| `0x81` | TFLM setup |
+| `0x82` | ready/waiting for the next RX frame |
+| `0x83` | receiving/checking a frame |
+| `0x84` | running TFLM reference inference |
+| `0x85` | running optimized inference |
+| `0xa5` | last handled frame passed |
+| `0xef` | last handled frame failed, or setup failed |
+
+After the runner finishes successfully, the board normally shows `0x82` because
+the firmware has returned to the idle state and is waiting for another frame.
 
 The TFLM quantization is set up to preserve the intended fixed-point shape:
 
@@ -341,16 +428,16 @@ inference:
 - manual terminal test: `picocom` hex-write frames
 
 The scripted soak test passed payload lengths `1,16,64,255,512` repeatedly with
-`status=0x00000001`, and manual `picocom` frame injection also passed. The next
-use of RX should be runtime input streaming for the larger FC model, while this
-small smoke firmware remains a regression test for the serial link itself.
+`status=0x00000001`, and manual `picocom` frame injection also passed. On top of
+that, `tflm_tiny_uart` now wires the same framed protocol into the small TFLM
+model for runtime input validation before moving to the larger FC model.
 
 ## Next Step
 
 The ref-vs-opt `tflm_tiny_ai` firmware builds, full-compiles, and passes on the
-board, and UART RX is now verified independently. The next main milestone should
-move to a larger fully-connected model, e.g. `784 -> 32 -> 10`, then connect the
-already-tested RX protocol to runtime input streaming. Kernel tuning should wait
-until that larger shape is stable, because the tiny `64 -> 16 -> 4` model
-over-amplifies setup/requantization/checksum overhead compared with the real
-workload.
+board, UART RX is verified independently, and `tflm_tiny_uart` now passes
+runtime-input board testing on the small model. The next milestone should move
+to a larger fully-connected model, e.g. `784 -> 32 -> 10`, reusing the same
+request/response protocol. Kernel tuning should wait until that larger shape is
+stable, because the tiny `64 -> 16 -> 4` model over-amplifies
+setup/requantization/checksum overhead compared with the real workload.

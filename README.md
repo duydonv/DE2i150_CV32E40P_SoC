@@ -302,6 +302,8 @@ make tiny_ai     # exported tiny INT8 MLP, baseline vs CORE-V/PULP
 make rx_smoke    # UART RX framed payload/checksum smoke test
 make tflm_tiny_ai CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
                  # same tiny INT8 MLP as a TFLM reference model
+make tflm_tiny_uart CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+                 # tiny TFLM model with UART RX runtime input frames
 ```
 
 The benchmark firmware measures `mcycle` and `minstret` for three groups:
@@ -388,6 +390,12 @@ For example, a three-instruction loop body uses raw immediate `4`. The
   full-compiles. Its board run passes with ref cycles `167507`, opt cycles
   `29620`, checksum match `0xc5f79430`, zero class/score mismatches, and
   speedup `5.66x`.
+- With `tflm_tiny_uart` firmware, **UART TX** prints one banner and then waits
+  for framed **UART RX** input. It runs one runtime 64-byte sample through both
+  `tflm_ref` and `pulp_opt`, then returns one `OK`/`ERR` line. It does not print
+  a repeated report, so host scripts can use a strict request/response loop.
+  The board runner passes with one ping plus 8 inference frames, zero
+  ref-vs-opt score mismatches, and about `5.61x` speedup on the small model.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status
@@ -442,9 +450,10 @@ placed successfully but missed slow-85C setup by about 0.2 ns.
    TFLM milestone is `tflm_tiny_ai`: the same tiny `.tflite` MLP with
    reference TFLM `FullyConnected`, before replacing that kernel with the
    CORE-V/PULP dot4 streaming path.
-7. UART TX output is present at 115200 8N1. UART RX MMIO and the standalone
-   `rx_smoke` framed-payload test are also present; TFLM runtime input
-   streaming should build on that protocol after the larger FC model is stable.
+7. UART TX output is present at 115200 8N1. UART RX MMIO, standalone
+   `rx_smoke`, and `tflm_tiny_uart` request/response inference are present.
+   The larger FC model should reuse this protocol after the small model path is
+   verified on the board.
 8. Add a scratch LCD output mirror later if the board demo needs standalone
    display without a laptop.
 9. Only after resource/performance/power data is available, decide whether to keep

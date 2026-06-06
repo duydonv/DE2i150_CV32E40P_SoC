@@ -110,9 +110,10 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   TensorFlow Python/`flatc`. Đây là bước đúng-trước-nhanh-sau, chưa dùng
   CORE-V/PULP optimized kernel.
 - UART RX hiện đã có peripheral/MMIO và smoke firmware riêng (`rx_smoke`) để
-  kiểm tra frame/checksum độc lập với TFLM. TFLM vẫn dùng fixed int8 inputs ở
-  các mốc hiện tại; runtime input streaming nên nối vào RX sau khi model FC lớn
-  ổn định.
+  kiểm tra frame/checksum độc lập với TFLM. Đã thêm `tflm_tiny_uart` để
+  đưa RX vào TFLM small model theo request/response, không dùng TX report lặp.
+  Mode này đã board-test pass; runtime input streaming cho model FC lớn nên
+  dùng lại protocol đó.
 
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
@@ -143,6 +144,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | TFLM tiny MLP ref-vs-opt firmware build | ✅ | `pulp_opt` dùng `cv.sdotsp.b`, `cv.lw`, `cv.setup`, `cv.clipur`; firmware `dec=58788` |
 | TFLM tiny MLP ref-vs-opt full compile | ✅ | `.sof` mới tại `output_files/de2i150_cv32e40p_top.sof`; setup slack +0.337 ns |
 | TFLM tiny MLP ref-vs-opt board run | ✅ | ref `167507` cycles, opt `29620` cycles, speedup `5.66x`, checksum match |
+| TFLM tiny MLP UART runtime-input firmware | ✅ board-pass | `firmware/tflm_tiny_uart.cc`, `firmware/tflm_tiny_uart_runner.py`; ping + 8 framed samples pass, speedup ~`5.61x` |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |
@@ -469,8 +471,10 @@ UART TX đã được thêm trực tiếp vào SoC wrapper, dùng pin map từ
 - UART RX 115200 8N1 đã có MMIO `0x0200_0008` + FIFO 16 byte + sticky
   overrun/frame-error status. `make rx_smoke` và `rx_smoke_runner.py` đã pass;
   manual `picocom` hex-write frame cũng pass.
-- Runtime input streaming/loader cho TFLM nên dùng lại protocol RX này sau khi
-  model FC lớn ổn định.
+- `tflm_tiny_uart` dùng lại frame RX để chạy một sample nhỏ qua TFLM ref và
+  `pulp_opt`, trả một dòng `OK/ERR`, tránh xung đột với report TX lặp.
+- Runtime input streaming/loader cho model FC lớn nên dùng lại protocol RX này
+  sau khi small-model UART path pass trên board.
 - LCD 1602 chỉ thêm nếu cần demo độc lập không dùng laptop.
 
 Power-analysis flow hiện tại:
@@ -530,9 +534,13 @@ Power-analysis flow hiện tại:
 - ✅ UART RX smoke test đã pass độc lập với TFLM: framed payload/checksum qua
   `rx_smoke_runner.py` và manual `picocom` đều nhận `OK`, status
   `0x00000001`.
+- ✅ Đã thêm `tflm_tiny_uart` để nhận runtime input cho small TFLM model:
+  host-build pass, firmware `text=49536 data=292 bss=8668 dec=58496`; board
+  run pass với ping + 8 inference frames, classes `0 0 1 1 2 2 3 3`,
+  `mismatches=0`, `rx_status=0x00000001`, speedup khoảng `5.61x`.
 - ⏭️ Kết quả opt đầu tiên đúng chức năng nhưng chưa tune sâu. Nên chuyển sang
-  model FC lớn hơn trước, ví dụ `784 -> 32 -> 10`, rồi nối runtime input qua
-  RX. Tối ưu kernel sâu nên làm sau khi shape lớn ổn định.
+  model FC lớn hơn, ví dụ `784 -> 32 -> 10`, dùng lại request/response RX vừa
+  pass. Tối ưu kernel sâu nên làm sau khi shape lớn ổn định.
 
 ## 6. Cách verify mọi thứ vẫn work khi resume
 

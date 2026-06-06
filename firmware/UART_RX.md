@@ -3,6 +3,10 @@
 This mode verifies the board UART receive path before it is used for runtime
 model inputs or a loader. It is intentionally separate from TFLM.
 
+The same frame envelope is reused by `tflm_tiny_uart` for runtime inference.
+That firmware should be driven as a request/response protocol: send one frame,
+wait for one `OK`/`ERR` line, then send the next frame.
+
 ## MMIO
 
 UART stays at the existing MMIO base:
@@ -135,3 +139,51 @@ Then paste one of these frames at the `*** hex:` prompt and press Enter:
 ```
 
 Use `Ctrl-A Ctrl-X` to exit picocom.
+
+## TFLM Tiny UART Commands
+
+`tflm_tiny_uart` uses the same envelope but different command IDs:
+
+| Command | Payload | Meaning |
+|---:|---|---|
+| `0x10` | 0 bytes | ping |
+| `0x11` | 64 bytes | run one small-model input sample |
+
+Build and test:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+make tflm_tiny_uart CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+cd ..
+/home/duydonv/altera_lite/25.1std/quartus/bin/quartus_sh --flow compile de2i150_cv32e40p_top
+```
+
+After programming the `.sof`:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+python3 tflm_tiny_uart_runner.py /dev/ttyUSB0
+```
+
+Expected inference responses contain `pass=yes`, equal `ref_cls`/`opt_cls`,
+and `mismatches=0`.
+
+Current board result: one ping plus 8 inference frames pass, expected classes
+`0 0 1 1 2 2 3 3`, `mismatches=0`, `rx_status=0x00000001`, and about `5.61x`
+small-model speedup.
+
+LED status while running `tflm_tiny_uart`:
+
+| LEDR[7:0] | Meaning |
+|---|---|
+| `0x80` | init |
+| `0x81` | TFLM setup |
+| `0x82` | ready/waiting for the next RX frame |
+| `0x83` | receiving/checking a frame |
+| `0x84` | running TFLM reference inference |
+| `0x85` | running optimized inference |
+| `0xa5` | last handled frame passed |
+| `0xef` | last handled frame failed, or setup failed |
+
+After a successful runner pass, the firmware returns to `0x82` because it is
+idle and waiting for another frame.
