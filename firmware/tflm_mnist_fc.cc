@@ -41,6 +41,8 @@
 typedef struct {
     uint32_t cycles;
     uint32_t instret;
+    uint32_t infer_cycles;
+    uint32_t infer_instret;
     uint32_t checksum;
     uint32_t label_matches;
     uint32_t class_matches;
@@ -53,6 +55,7 @@ typedef struct {
     run_result_t ref;
     run_result_t opt;
     uint32_t speedup_x100;
+    uint32_t infer_speedup_x100;
     uint32_t class_mismatches;
     uint32_t score_mismatches;
     uint32_t pass;
@@ -357,11 +360,43 @@ static uint32_t pack4_i8(const int8_t *data)
         ((uint32_t)(uint8_t)data[3] << 24);
 }
 
+static uint32_t is_word_aligned(const void *ptr)
+{
+    return (((uintptr_t)ptr & 3u) == 0u);
+}
+
 __attribute__((noinline))
 static int32_t dot4_i8(const int8_t *activation, const int8_t *weight,
     uint32_t word_count)
 {
     int32_t acc = 0;
+
+    if (is_word_aligned(activation) && is_word_aligned(weight)) {
+        uintptr_t act_ptr = (uintptr_t)activation;
+        uintptr_t weight_ptr = (uintptr_t)weight;
+        uint32_t act_word;
+        uint32_t weight_word;
+
+        __asm__ volatile (
+            ".option push\n"
+            ".option norvc\n"
+            ".balign 4\n"
+            ".insn i 0x2b, 4, x14, %[count], 4\n"
+            ".insn i 0x0b, 2, %[act_word], %[act_ptr], 4\n"
+            ".insn i 0x0b, 2, %[weight_word], %[weight_ptr], 4\n"
+            ".insn r 0x7b, 1, 0x54, %[acc], %[act_word], %[weight_word]\n"
+            ".option pop\n"
+            : [acc] "+r" (acc),
+              [act_ptr] "+r" (act_ptr),
+              [weight_ptr] "+r" (weight_ptr),
+              [act_word] "=&r" (act_word),
+              [weight_word] "=&r" (weight_word)
+            : [count] "r" (word_count)
+            : "memory"
+        );
+
+        return acc;
+    }
 
     for (uint32_t word = 0u; word < word_count; ++word) {
         const uint32_t act_word = pack4_i8(&activation[word * 4u]);
@@ -370,6 +405,59 @@ static int32_t dot4_i8(const int8_t *activation, const int8_t *weight,
     }
 
     return acc;
+}
+
+__attribute__((noinline))
+static void dot4_i8x4_stream_loads(const int8_t *activation,
+    const int8_t *weight0, uint32_t row_stride, uint32_t word_count,
+    int32_t *accs)
+{
+    uintptr_t act_ptr = (uintptr_t)activation;
+    uintptr_t weight0_ptr = (uintptr_t)weight0;
+    uintptr_t weight1_ptr = (uintptr_t)(weight0 + row_stride);
+    uintptr_t weight2_ptr = (uintptr_t)(weight0 + (2u * row_stride));
+    uintptr_t weight3_ptr = (uintptr_t)(weight0 + (3u * row_stride));
+    uint32_t act_word;
+    uint32_t weight_word;
+    int32_t acc0 = accs[0];
+    int32_t acc1 = accs[1];
+    int32_t acc2 = accs[2];
+    int32_t acc3 = accs[3];
+
+    __asm__ volatile (
+        ".option push\n"
+        ".option norvc\n"
+        ".balign 4\n"
+        ".insn i 0x2b, 4, x14, %[count], 10\n"
+        ".insn i 0x0b, 2, %[act_word], %[act_ptr], 4\n"
+        ".insn i 0x0b, 2, %[weight_word], %[weight0_ptr], 4\n"
+        ".insn r 0x7b, 1, 0x54, %[acc0], %[act_word], %[weight_word]\n"
+        ".insn i 0x0b, 2, %[weight_word], %[weight1_ptr], 4\n"
+        ".insn r 0x7b, 1, 0x54, %[acc1], %[act_word], %[weight_word]\n"
+        ".insn i 0x0b, 2, %[weight_word], %[weight2_ptr], 4\n"
+        ".insn r 0x7b, 1, 0x54, %[acc2], %[act_word], %[weight_word]\n"
+        ".insn i 0x0b, 2, %[weight_word], %[weight3_ptr], 4\n"
+        ".insn r 0x7b, 1, 0x54, %[acc3], %[act_word], %[weight_word]\n"
+        ".option pop\n"
+        : [acc0] "+r" (acc0),
+          [acc1] "+r" (acc1),
+          [acc2] "+r" (acc2),
+          [acc3] "+r" (acc3),
+          [act_ptr] "+r" (act_ptr),
+          [weight0_ptr] "+r" (weight0_ptr),
+          [weight1_ptr] "+r" (weight1_ptr),
+          [weight2_ptr] "+r" (weight2_ptr),
+          [weight3_ptr] "+r" (weight3_ptr),
+          [act_word] "=&r" (act_word),
+          [weight_word] "=&r" (weight_word)
+        : [count] "r" (word_count)
+        : "memory"
+    );
+
+    accs[0] = acc0;
+    accs[1] = acc1;
+    accs[2] = acc2;
+    accs[3] = acc3;
 }
 
 static int8_t requant_fc_output(const fc_opt_params_t *params,
@@ -590,7 +678,37 @@ static void mnist_fc_infer_opt_one(const int8_t *input, int8_t *output)
 {
     int8_t hidden[HIDDEN_DIM] __attribute__((aligned(4)));
 
-    for (uint32_t h = 0u; h < HIDDEN_DIM; ++h) {
+    uint32_t h = 0u;
+    for (; h + 3u < HIDDEN_DIM; h += 4u) {
+        const int8_t *weight =
+            &fc1_params.weights[h * fc1_params.input_dim];
+        int32_t accs[4] = {
+            fc1_params.bias[h],
+            fc1_params.bias[h + 1u],
+            fc1_params.bias[h + 2u],
+            fc1_params.bias[h + 3u],
+        };
+
+        if (is_word_aligned(input) && is_word_aligned(weight)) {
+            dot4_i8x4_stream_loads(input, weight, fc1_params.input_dim,
+                INPUT_WORDS, accs);
+        } else {
+            accs[0] += dot4_i8(input, weight, INPUT_WORDS);
+            accs[1] += dot4_i8(input, weight + fc1_params.input_dim,
+                INPUT_WORDS);
+            accs[2] += dot4_i8(input, weight + (2u * fc1_params.input_dim),
+                INPUT_WORDS);
+            accs[3] += dot4_i8(input, weight + (3u * fc1_params.input_dim),
+                INPUT_WORDS);
+        }
+
+        hidden[h] = requant_fc_output(&fc1_params, h, accs[0]);
+        hidden[h + 1u] = requant_fc_output(&fc1_params, h + 1u, accs[1]);
+        hidden[h + 2u] = requant_fc_output(&fc1_params, h + 2u, accs[2]);
+        hidden[h + 3u] = requant_fc_output(&fc1_params, h + 3u, accs[3]);
+    }
+
+    for (; h < HIDDEN_DIM; ++h) {
         const int8_t *weight =
             &fc1_params.weights[h * fc1_params.input_dim];
         int32_t acc = fc1_params.bias[h] +
@@ -619,6 +737,75 @@ static uint32_t mix_mnist_output(uint32_t checksum, const int8_t *outputs,
     return checksum;
 }
 
+static void load_tflm_input(const int8_t *input)
+{
+    for (uint32_t i = 0u; i < INPUT_DIM; ++i) {
+        g_input->data.int8[i] = input[i];
+    }
+}
+
+__attribute__((noinline))
+static uint32_t measure_tflm_inference_only(run_result_t *result)
+{
+    uint32_t status = 0u;
+
+    result->infer_cycles = 0u;
+    result->infer_instret = 0u;
+
+    for (uint32_t sample = 0u; sample < SAMPLE_COUNT; ++sample) {
+        load_tflm_input(mnist_fc_test_inputs[sample]);
+
+        perf_fence();
+        const uint32_t cycle_start = read_mcycle_lo();
+        const uint32_t instret_start = read_minstret_lo();
+
+        if (g_interpreter->Invoke() != kTfLiteOk) {
+            status = 0xe006u;
+        }
+
+        perf_fence();
+        const uint32_t instret_end = read_minstret_lo();
+        const uint32_t cycle_end = read_mcycle_lo();
+
+        result->infer_cycles += cycle_end - cycle_start;
+        result->infer_instret += instret_end - instret_start;
+
+        if (status != 0u) {
+            sink = status;
+            return status;
+        }
+    }
+
+    sink = (uint32_t)(uint8_t)g_output->data.int8[0];
+    return 0u;
+}
+
+__attribute__((noinline))
+static uint32_t measure_opt_inference_only(run_result_t *result)
+{
+    result->infer_cycles = 0u;
+    result->infer_instret = 0u;
+
+    for (uint32_t sample = 0u; sample < SAMPLE_COUNT; ++sample) {
+        perf_fence();
+        const uint32_t cycle_start = read_mcycle_lo();
+        const uint32_t instret_start = read_minstret_lo();
+
+        mnist_fc_infer_opt_one(mnist_fc_test_inputs[sample],
+            opt_outputs[sample]);
+
+        perf_fence();
+        const uint32_t instret_end = read_minstret_lo();
+        const uint32_t cycle_end = read_mcycle_lo();
+
+        result->infer_cycles += cycle_end - cycle_start;
+        result->infer_instret += instret_end - instret_start;
+    }
+
+    sink = (uint32_t)(uint8_t)opt_outputs[SAMPLE_COUNT - 1u][0];
+    return 0u;
+}
+
 __attribute__((noinline))
 static uint32_t run_tflm_mnist_samples(run_result_t *result)
 {
@@ -630,9 +817,7 @@ static uint32_t run_tflm_mnist_samples(run_result_t *result)
     result->score_mismatches = 0u;
 
     for (uint32_t sample = 0u; sample < SAMPLE_COUNT; ++sample) {
-        for (uint32_t i = 0u; i < INPUT_DIM; ++i) {
-            g_input->data.int8[i] = mnist_fc_test_inputs[sample][i];
-        }
+        load_tflm_input(mnist_fc_test_inputs[sample]);
 
         if (g_interpreter->Invoke() != kTfLiteOk) {
             run_status = 0xe006u;
@@ -708,6 +893,14 @@ static run_result_t measure_tflm_reference(void)
 {
     run_result_t result = {};
 
+    uint32_t status = measure_tflm_inference_only(&result);
+    if (status != 0u) {
+        result.status = status;
+        result.checksum = mix32(0x4d4e4953u, status);
+        result.pass = 0u;
+        return result;
+    }
+
     perf_fence();
     const uint32_t cycle_start = read_mcycle_lo();
     const uint32_t instret_start = read_minstret_lo();
@@ -732,6 +925,8 @@ static run_result_t measure_tflm_reference(void)
 static run_result_t measure_pulp_opt(void)
 {
     run_result_t result = {};
+
+    (void)measure_opt_inference_only(&result);
 
     perf_fence();
     const uint32_t cycle_start = read_mcycle_lo();
@@ -794,6 +989,8 @@ static void measure_ref_vs_opt(mnist_fc_result_t *result)
 
     result->speedup_x100 = speedup_x100(result->ref.cycles,
         result->opt.cycles);
+    result->infer_speedup_x100 = speedup_x100(result->ref.infer_cycles,
+        result->opt.infer_cycles);
     result->class_mismatches = class_mismatch_count();
     result->score_mismatches = score_mismatch_count();
     result->pass = result->ref.pass && result->opt.pass &&
@@ -920,6 +1117,21 @@ static void uart_print_variant_row(const char *name,
     uart_putc('\n');
 }
 
+static void uart_print_infer_row(const char *name,
+    const run_result_t *result)
+{
+    uart_puts(name);
+    uart_puts("  ");
+    uart_put_u32_dec_right(result->infer_cycles, 8u);
+    uart_puts("  ");
+    uart_put_u32_dec_right(result->infer_instret, 8u);
+    uart_puts("  ");
+    uart_put_u32_dec_right(result->infer_cycles / SAMPLE_COUNT, 10u);
+    uart_puts("  ");
+    uart_put_x100(ratio_x100(result->infer_cycles, TOTAL_INT8_MACS));
+    uart_putc('\n');
+}
+
 static void uart_print_report(const mnist_fc_result_t *result)
 {
     uart_puts("\nDE2i-150 CV32E40P TFLM MNIST FC ref-vs-opt\n");
@@ -940,15 +1152,22 @@ static void uart_print_report(const mnist_fc_result_t *result)
     uart_put_u32_dec(TOTAL_INT8_MACS);
     uart_puts("\nCustom dot4 ops: ");
     uart_put_u32_dec(TOTAL_DOT4_OPS);
-    uart_puts("\nOptimized kernel: cv.sdotsp.b dot4 + per-channel TFLite requant");
+    uart_puts("\nOptimized kernel: cv.sdotsp.b + aligned cv.lw/cv.setup FC1x4 fast path + per-channel TFLite requant");
     uart_puts("\n\n");
 
+    uart_puts("Validated run: fixed-vector input handling + inference + validation checks\n");
     uart_puts("Variant   Cycles    Instret  Cyc/sample  Cyc/MAC  Checksum    Status      Pass\n");
     uart_puts("--------  --------  --------  ----------  -------  ----------  ----------  ----\n");
     uart_print_variant_row("tflm_ref", &result->ref, result->ref.pass);
     uart_print_variant_row("pulp_opt", &result->opt,
         result->opt.pass && (result->class_mismatches == 0u) &&
         (result->score_mismatches == 0u));
+
+    uart_puts("\nInference-only: Invoke/custom infer only, no input handling or validation bookkeeping\n");
+    uart_puts("Variant   Cycles    Instret  Cyc/sample  Cyc/MAC\n");
+    uart_puts("--------  --------  --------  ----------  -------\n");
+    uart_print_infer_row("tflm_ref", &result->ref);
+    uart_print_infer_row("pulp_opt", &result->opt);
 
     uart_puts("\n\nExpected checksum: ");
     uart_put_u32_hex8(MNIST_FC_TEST_CHECKSUM);
@@ -974,6 +1193,8 @@ static void uart_print_report(const mnist_fc_result_t *result)
     uart_put_u32_dec(result->score_mismatches);
     uart_puts("\nSpeedup: ");
     uart_put_speed(result->speedup_x100);
+    uart_puts("\nInference-only speedup: ");
+    uart_put_speed(result->infer_speedup_x100);
     uart_puts("\nLabels:           ");
     uart_print_labels();
     uart_puts("\nExpected classes: ");

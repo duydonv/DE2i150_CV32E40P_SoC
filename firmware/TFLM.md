@@ -466,12 +466,13 @@ TFLite flatbuffer `Buffer` objects. This avoids the TFLM Micro `GetTensor()`
 constant-buffer issue that produced setup status `0xe036` and zeroed
 ref-vs-opt outputs in an earlier image.
 
-The current MNIST optimized kernel deliberately packs 4 bytes in C before the
-dot4 instruction. This avoids assuming 32-bit alignment for weight buffers
-inside the TFLite flatbuffer. The UART report now proves bit-exact behavior, so
-the next optimization step can replace that packing loop with `cv.lw` and
-hardware loop setup where alignment is guaranteed or after copying/laying out
-weights safely.
+The current MNIST optimized kernel uses an aligned FC1x4 stream fast path
+around the dot4 body. FC1 processes four hidden outputs per tile: the hardware
+loop body loads one activation word, loads four weight words, and updates four
+independent accumulators with `cv.sdotsp.b`. If alignment is not suitable, the
+firmware falls back to the earlier scalar `dot4_i8()` path. FC2 remains on the
+scalar aligned `cv.lw`/`cv.setup` dot4 path because its total MAC count is much
+smaller.
 
 Build:
 
@@ -483,35 +484,48 @@ make tflm_mnist_fc CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-risc
 Current ref-vs-opt build/full-compile/program/board status:
 
 ```text
-Firmware size: text=105252 data=292 bss=14428 dec=119972
-firmware.bin: 105548 bytes
+Firmware size: text=107012 data=292 bss=14428 dec=121732
+firmware.bin: 107308 bytes
 SOF: output_files/de2i150_cv32e40p_top.sof
-Quartus: 0 errors, 82 warnings
+Quartus flow: successful
 Post-fit resources: 13381 logic elements, 2793 registers, 2097152 memory bits, 16 DSP elements
 Timing slow 1200mV 85C: setup slack +0.256 ns, hold slack +0.375 ns
-Programmer: USB-Blaster [1-2], configuration succeeded, SOF checksum 0x0228A8CA
+SOF assembler checksum: 0x022DD42A
 ```
 
 The previous reference-only image was captured on the board and passed:
 checksum `0x00cb95fc`, label matches `31/32`, expected-class matches `32/32`,
 score mismatches `0`, cycles `11171144`, instret `7711381`.
 
-The current ref-vs-opt image was captured on the board and passed:
+The current ref-vs-opt image was captured on the board and passed. The
+validated run includes fixed-vector input handling, inference, argmax,
+checksum, and validation bookkeeping:
 
 ```text
-tflm_ref: cycles 11172801, instret 7687374, cyc/sample 349150, cyc/MAC 13.74,
+tflm_ref: cycles 11172961, instret 7687470, cyc/sample 349155, cyc/MAC 13.74,
           checksum 0x00cb95fc, status 0x00000000, pass yes
-pulp_opt: cycles 5546172, instret 3433381, cyc/sample 173317, cyc/MAC 6.82,
+pulp_opt: cycles 901789, instret 624902, cyc/sample 28180, cyc/MAC 1.11,
           checksum 0x00cb95fc, status 0x00000000, pass yes
 Labels: 31/32 for both paths
 Expected-class matches: 32/32 for both paths
 Class mismatches: 0
 Score mismatches: 0
-Speedup: 2.01x
+Speedup: 12.39x
 Overall pass: yes
 ```
 
+The UART report also prints a separate inference-only pass. For `tflm_ref`,
+the measured interval only covers `Invoke()` after the fixed-vector input has
+already been copied into the input tensor. For `pulp_opt`, the measured
+interval only covers the custom inference call:
+
+```text
+tflm_ref: cycles 10817077, instret 7493516, cyc/sample 338033, cyc/MAC 13.30
+pulp_opt: cycles 874897, instret 608100, cyc/sample 27340, cyc/MAC 1.08
+Inference-only speedup: 12.36x
+```
+
 The next firmware step is either to reuse the existing request/response
-protocol with 784-byte input frames or to tune the optimized kernel further
-with `cv.lw`/`cv.setup`/clamp after the flatbuffer alignment and signed clamp
-semantics are handled.
+protocol with 784-byte input frames or to evaluate whether an unsigned
+quantized model is worth generating so `cv.clipur` can be used cleanly in the
+activation clamp path.
