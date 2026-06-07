@@ -12,7 +12,7 @@ modes. These map the earlier gem5 AI-extension prototype onto the CORE-V
 instructions already present in CV32E40P: `cv.mac`, `cv.sdotsp.b`, `cv.max`,
 `cv.clipur`, `cv.lw` post-increment, and `cv.setup`.
 
-Current status as of 2026-06-06:
+Current status as of 2026-06-07:
 
 - `COREV_PULP=1`, `FPU=0`, `COREV_CLUSTER=0`.
 - `FPGA_TIMING_MODE=1` is enabled in the local core copy to close 50 MHz
@@ -29,7 +29,10 @@ Current status as of 2026-06-06:
 - The MNIST FC `784 -> 32 -> 10` full-INT8 model now has fixed-vector
   firmware integration. The first reference-only board run passed, and the
   current `tflm_mnist_fc` image adds a `pulp_opt` path using `cv.sdotsp.b`
-  dot4 plus model-derived per-channel requantization.
+  dot4 with aligned `cv.lw`/`cv.setup` FC1x4 fast path plus model-derived
+  per-channel requantization. The latest board run passes with `12.39x`
+  validated speedup and `12.36x` inference-only speedup over TFLM reference on
+  32 fixed MNIST vectors.
 - Questa RTL simulation now generates per-kernel VCD files for Quartus Power
   Analyzer; see `sim/README.md`.
 - The sister gem5 prototype has been semantically aligned to this board
@@ -407,14 +410,17 @@ For example, a three-instruction loop body uses raw immediate `4`. The
 - With `tflm_mnist_fc` firmware, **UART TX** prints a fixed-vector MNIST FC
   ref-vs-opt report for the host-trained `784 -> 32 -> 10` INT8 model.
   `tflm_ref` uses official TFLM `FullyConnected`; `pulp_opt` reads the same
-  TFLite flatbuffer weights/biases and uses `cv.sdotsp.b` dot4 plus
-  per-channel TFLite requantization. The fixed-vector checksum is
+  TFLite flatbuffer weights/biases and uses `cv.sdotsp.b` dot4 with an aligned
+  `cv.lw`/`cv.setup` FC1x4 fast path plus per-channel TFLite requantization.
+  The fixed-vector checksum is
   `0x00cb95fc`, with 32/32 expected-class matches, 0 score mismatches, and
   31/32 label matches for the first 32 MNIST test vectors. The current board
-  run passes with ref `11172801` cycles, opt `5546172` cycles, and `2.01x`
-  speedup. The MNIST optimized path currently does not use `cv.lw`,
-  `cv.setup`, or `cv.clipur`; those remain follow-up tuning now that the dot4
-  path is confirmed bit-exact.
+  run passes with validated ref `11172961` cycles, opt `901789` cycles, and
+  `12.39x` speedup. It also prints inference-only timing: ref `10817077`
+  cycles, opt `874897` cycles, `12.36x` speedup. The MNIST optimized path still
+  keeps scalar signed TFLite-compatible clamp/requantization; `cv.clipur`
+  remains a follow-up after deciding whether to keep signed INT8 or regenerate
+  an unsigned quantized model.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status
@@ -448,18 +454,20 @@ yes`.
 The first `tflm_mnist_fc` reference-only board run passed over UART:
 checksum `0x00cb95fc`, expected-class matches `32/32`, score mismatches `0`,
 label matches `31/32`, and `tflm_ref` cycles `11171144`. The current
-ref-vs-opt firmware builds with size `text=105252 data=292 bss=14428
-dec=119972`; `firmware.bin` is 105,548 bytes and fits in the 128 KB BRAM.
+ref-vs-opt firmware builds with size `text=107012 data=292 bss=14428
+dec=121732`; `firmware.bin` is 107,308 bytes and fits in the 128 KB BRAM.
 Full Quartus compile passed and produced
 `output_files/de2i150_cv32e40p_top.sof`; post-fit resources are 13,381 logic
 elements, 2,793 registers, 2,097,152 memory bits, and 16 embedded 9-bit
 multiplier elements. Slow 1200 mV 85C timing closed with setup slack
-`+0.256 ns` and hold slack `+0.375 ns`. The ref-vs-opt `.sof` was programmed
-successfully over USB-Blaster with programming checksum `0x0228A8CA`; UART
-report capture for this image passed: `tflm_ref` cycles `11172801`, instret
-`7687374`; `pulp_opt` cycles `5546172`, instret `3433381`; both paths produced
-checksum `0x00cb95fc`, expected-class `32/32`, score mismatches `0`, and
-`Overall pass: yes`.
+`+0.256 ns` and hold slack `+0.375 ns`. The ref-vs-opt `.sof` assembler
+checksum is `0x022DD42A`; UART report capture for this image passed:
+validated `tflm_ref` cycles `11172961`, instret `7687470`; validated
+`pulp_opt` cycles `901789`, instret `624902`; inference-only `tflm_ref`
+cycles `10817077`, instret `7493516`; inference-only `pulp_opt` cycles
+`874897`, instret `608100`. Both validated paths produced checksum
+`0x00cb95fc`, expected-class `32/32`, score mismatches `0`, speedup `12.39x`,
+inference-only speedup `12.36x`, and `Overall pass: yes`.
 
 The QSF uses `PLACEMENT_EFFORT_MULTIPLIER=4.0`; with `3.0`, this design
 placed successfully but missed slow-85C setup by about 0.2 ns.

@@ -57,14 +57,19 @@ hidden activation, and output are `int8`; biases are `int32`.
 Firmware status: `make tflm_mnist_fc` now embeds this flatbuffer and runs a
 32-sample fixed-vector ref-vs-opt report on the DE2i-150. The `pulp_opt` path
 uses the same TFLite model data rather than a duplicated hard-coded weight set.
-It currently uses `cv.sdotsp.b` dot4 plus TFLite-compatible per-channel
-requantization; `cv.lw`, `cv.setup`, and clamp-instruction tuning are deferred
-to the next tuning step now that the dot4 path is confirmed bit-exact on UART.
+It currently uses `cv.sdotsp.b` dot4 with an aligned `cv.lw`/`cv.setup` FC1x4
+fast path plus TFLite-compatible per-channel requantization. If activation or
+weight pointers are not 4-byte aligned, the firmware falls back to the earlier
+scalar byte-pack path. Clamp-instruction tuning is still deferred because the
+current model is signed INT8 and must keep TFLite-compatible signed activation
+ranges.
 
 Board status: the current ref-vs-opt image passes on the DE2i-150. The UART
-capture reports `tflm_ref` cycles `11172801`, `pulp_opt` cycles `5546172`,
-speedup `2.01x`, checksum `0x00cb95fc` on both paths, expected-class matches
-`32/32`, class mismatches `0`, score mismatches `0`, and `Overall pass: yes`.
+capture reports validated-run `tflm_ref` cycles `11172961`, `pulp_opt` cycles
+`901789`, speedup `12.39x`; inference-only `tflm_ref` cycles `10817077`,
+`pulp_opt` cycles `874897`, speedup `12.36x`; checksum `0x00cb95fc` on both
+paths, expected-class matches `32/32`, class mismatches `0`, score mismatches
+`0`, and `Overall pass: yes`.
 
 ## Files
 

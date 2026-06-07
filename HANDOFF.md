@@ -1,7 +1,7 @@
 # HANDOFF — DE2i-150 + CV32E40P bring-up
 
 > Tài liệu bàn giao trạng thái dự án để bất kỳ agent / developer mới nào
-> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **06/06/2026**.
+> cũng có thể tiếp tục làm việc ngay. Cập nhật lần cuối: **07/06/2026**.
 
 ## 1. Mục tiêu cuối cùng
 
@@ -121,10 +121,14 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   mẫu MNIST test, model size `28368` byte, checksum INT8 `0x7c33a8dc`.
   Firmware `tflm_mnist_fc` đã chạy ref-vs-opt pass trên board: `tflm_ref` và
   `pulp_opt` đều dùng cùng flatbuffer model, checksum `0x00cb95fc`, expected
-  class `32/32`, score mismatches `0`, speedup hiện tại `2.01x`. Bản này đã
-  sửa lỗi đọc constant tensor của TFLM Micro bằng cách lấy weight/bias trực
-  tiếp từ flatbuffer buffer. Đây là mốc đúng-trước-nhanh-sau; MNIST optimized
-  path hiện mới dùng `cv.sdotsp.b` dot4, chưa tune `cv.lw`/`cv.setup`/clamp.
+  class `32/32`, score mismatches `0`. Bản này đã sửa lỗi đọc constant tensor
+  của TFLM Micro bằng cách lấy weight/bias trực tiếp từ flatbuffer buffer.
+  Sau khi thêm fast path FC1x4 aligned `cv.lw` + `cv.setup` quanh
+  `cv.sdotsp.b`, board UART mới nhất đạt validated speedup `12.39x`: ref
+  `11172961` cycles, opt `901789` cycles, checksum match,
+  `Overall pass: yes`. Firmware cũng in thêm inference-only timing: ref
+  `10817077` cycles, opt `874897` cycles, speedup `12.36x`. Clamp vẫn giữ
+  scalar signed TFLite-compatible path, chưa map sang `cv.clipur`.
 
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
@@ -158,7 +162,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | TFLM tiny MLP UART runtime-input firmware | ✅ board-pass | `firmware/tflm_tiny_uart.cc`, `firmware/tflm_tiny_uart_runner.py`; ping + 8 framed samples pass, speedup ~`5.61x` |
 | MNIST FC `784->32->10` INT8 host artifacts | ✅ host-verified | `firmware/mnist_fc/`; INT8 `.tflite` accuracy `96.28%`, model `28368` B, checksum `0x7c33a8dc` |
 | MNIST FC TFLM reference board run | ✅ board-pass | ref-only UART checksum `0x00cb95fc`, expected-class `32/32`, score mismatches `0`, cycles `11171144` |
-| MNIST FC ref-vs-opt firmware | ✅ board-pass | `firmware/tflm_mnist_fc.cc`; ref `11172801` cycles, opt `5546172` cycles, speedup `2.01x`, checksum `0x00cb95fc`, score mismatches `0`, firmware `dec=119972`, `.sof` checksum `0x0228A8CA` |
+| MNIST FC ref-vs-opt firmware | ✅ board-pass | `firmware/tflm_mnist_fc.cc`; validated ref `11172961` cycles, opt `901789` cycles, speedup `12.39x`; inference-only ref `10817077`, opt `874897`, speedup `12.36x`; checksum `0x00cb95fc`, score mismatches `0`, firmware `dec=121732`, `.sof` checksum `0x022DD42A` |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |
@@ -566,23 +570,30 @@ Power-analysis flow hiện tại:
   từ cùng flatbuffer model, dùng `cv.sdotsp.b` dot4 và per-channel TFLite
   requant. Lỗi setup trước đó (`0xe036`, cả ref/custom đều in 0) do dùng
   `GetTensor()` để lấy constant tensor trong TFLM Micro; bản hiện tại đọc
-  weight/bias trực tiếp từ flatbuffer `Buffer`. Chưa dùng `cv.lw`/hardware loop
-  ở MNIST path để tránh rủi ro alignment của weight trong flatbuffer; đây là
-  phần tune tiếp theo sau mốc dot4 bit-exact.
+  weight/bias trực tiếp từ flatbuffer `Buffer`.
+- ✅ Đã thêm fast path FC1x4 aligned `cv.lw` + `cv.setup` cho MNIST dot4
+  kernel. FC1 xử lý 4 hidden output mỗi tile; loop body dùng 1 `cv.lw`
+  activation, 4 `cv.lw` weight và 4 `cv.sdotsp.b`. Nếu alignment không phù
+  hợp thì fallback về path scalar `dot4_i8()`/`pack4_i8()` cũ. FC2 vẫn dùng
+  path scalar aligned `cv.lw` + `cv.setup`. Clamp vẫn giữ scalar signed
+  TFLite-compatible path.
 - ✅ Board UART run ref-vs-opt của `tflm_mnist_fc` đã pass: ref
-  `11172801` cycles / `7687374` instret, opt `5546172` cycles / `3433381`
-  instret, checksum hai path đều `0x00cb95fc`, label matches `31/32`,
-  expected-class `32/32`, class mismatches `0`, score mismatches `0`, speedup
-  `2.01x`, `Overall pass: yes`.
+  `11172961` cycles / `7687470` instret, opt `901789` cycles / `624902`
+  instret cho validated run; checksum hai path đều `0x00cb95fc`, label
+  matches `31/32`, expected-class `32/32`, class mismatches `0`, score
+  mismatches `0`, speedup `12.39x`, `Overall pass: yes`.
+- ✅ Cùng firmware hiện in thêm inference-only timing để phục vụ báo cáo:
+  ref `10817077` cycles / `7493516` instret, opt `874897` cycles /
+  `608100` instret, speedup `12.36x`. Đây là pass đo riêng quanh
+  `Invoke()`/`mnist_fc_infer_opt_one()`, không tính input handling,
+  checksum/argmax/mismatch bookkeeping.
 - ✅ Build pass với xPack:
-  `text=105252 data=292 bss=14428 dec=119972`, `firmware.bin=105548` byte.
-  Full Quartus compile pass: 13,381 LE, 2,793 regs, 2,097,152 memory bits,
-  16 DSP; slow-85C setup slack `+0.256 ns`, hold `+0.375 ns`. Ref-vs-opt
-  `.sof` đã nạp thành công qua `USB-Blaster [1-2]`, programming checksum
-  `0x0228A8CA`.
+  `text=107012 data=292 bss=14428 dec=121732`, `firmware.bin=107308` byte.
+  Full Quartus compile pass ngày 07/06/2026: 13,381 LE, 2,793 regs,
+  2,097,152 memory bits, 16 DSP; slow-85C setup slack `+0.256 ns`, hold
+  `+0.375 ns`. `.sof` checksum trong assembler report: `0x022DD42A`.
 - ⏭️ Bước tiếp theo là thêm UART RX frame 784 byte cho MNIST input runtime
-  hoặc tối ưu tiếp kernel bằng `cv.lw`/`cv.setup`/clamp sau khi xử lý alignment
-  và signed clamp semantics.
+  hoặc đánh giá hướng model/quantization unsigned để tận dụng `cv.clipur`.
 
 ## 6. Cách verify mọi thứ vẫn work khi resume
 
