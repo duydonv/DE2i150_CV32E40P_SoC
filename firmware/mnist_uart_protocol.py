@@ -224,7 +224,6 @@ def load_pgm_sample(path: Path, labels: dict[str, int] | None = None) -> MnistSa
         name=path.name,
         payload=pixels_to_payload(read_pgm_pixels(path)),
         label=label,
-        expected_class=label,
         source=str(path),
     )
 
@@ -291,11 +290,17 @@ def validate_infer_response(
         return False, {"name": sample.name, "error": f"parse-error: {exc}", "line": line}
 
     label_match = (
+        sample.label is not None
+        and result["ref_cls"] == sample.label
+        and result["opt_cls"] == sample.label
+    )
+    expected_match = (
         sample.expected_class is not None
         and result["ref_cls"] == sample.expected_class
         and result["opt_cls"] == sample.expected_class
     )
     result["label_match"] = label_match
+    result["expected_match"] = expected_match
 
     ok = (
         result["pass"] is True
@@ -304,10 +309,10 @@ def validate_infer_response(
         and ref_scores == opt_scores
     )
     if sample.expected_scores is not None:
-        ok = ok and label_match
+        ok = ok and expected_match
         ok = ok and ref_scores == sample.expected_scores
         ok = ok and opt_scores == sample.expected_scores
-    elif require_label_match:
+    if require_label_match:
         ok = ok and label_match
 
     result["host_pass"] = ok

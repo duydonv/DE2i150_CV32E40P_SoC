@@ -538,6 +538,29 @@ from MNIST test indices `32..41` pass with ref-vs-opt score mismatches `0`,
 label matches `10/10`, ref cycles `350615..350622`, opt cycles
 `27999..28014`, and aggregate speedup `12.52x`.
 
+The first GUI wrapper for the same protocol is `tflm_mnist_uart_gui.py`. It is
+a PySide6 + pyqtgraph frontend that reuses `mnist_uart_protocol.py` for serial
+frames, PGM loading, quantization, and response parsing. It provides port/baud
+selection, ping, sample list, image preview, selected-sample inference,
+all-loaded-sample batch runs, score bars, timing fields, a per-sample result
+table, aggregate pass/label/cycle/speedup summary, and a raw UART log. Batch
+runs are sequential at the UART protocol level: the host sends one frame and
+waits for one response before sending the next frame.
+
+Set up and run:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc
+python3 -m venv .venv_gui
+.venv_gui/bin/python -m pip install -r firmware/gui_requirements.txt
+.venv_gui/bin/python firmware/tflm_mnist_uart_gui.py
+```
+
+The GUI reports true-label matches separately from expected-artifact matches.
+This matters for the 32 fixed vectors: they are expected to match the stored
+TFLM reference score vectors exactly, while one of them is a model
+misclassification against the original MNIST label.
+
 Current ref-vs-opt build/full-compile/program/board status:
 
 ```text

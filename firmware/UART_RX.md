@@ -242,6 +242,31 @@ Current board result for image mode: `--images-dir --limit 10` passes `10/10`
 samples, label matches `10/10`, score mismatches `0`, ref cycles
 `350615..350622`, opt cycles `27999..28014`, and aggregate speedup `12.52x`.
 
+The GUI MVP uses the same host-side protocol helpers:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc
+.venv_gui/bin/python firmware/tflm_mnist_uart_gui.py
+```
+
+Install the GUI dependencies once with:
+
+```bash
+python3 -m venv .venv_gui
+.venv_gui/bin/python -m pip install -r firmware/gui_requirements.txt
+```
+
+The GUI currently supports port/baud selection, ping, PGM/fixed-vector sample
+selection, preview, selected-sample inference, all-loaded-sample batch runs,
+ref/opt score bars, cycle/speedup fields, a per-sample result table, aggregate
+pass/label/cycle/speedup summary, and raw UART response logging. Batch runs
+still send one frame and wait for one response at a time, matching the board
+firmware protocol. The GUI reports both true-label matches and
+expected-artifact matches. For the 32 fixed vectors, the expected artifact is
+the TFLM reference output captured during model generation; one fixed vector
+has true label `5` but expected class `6`, so it is an expected-match pass but
+a true-label mismatch.
+
 LED status while running `tflm_mnist_uart`:
 
 | LEDR[7:0] | Meaning |

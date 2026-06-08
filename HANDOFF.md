@@ -138,6 +138,12 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   `27999..28014`, aggregate speedup `12.52x`. Ảnh PGM export nằm dưới
   `firmware/mnist_fc/test_images_pgm/` và bị ignore; tái tạo bằng
   `firmware/mnist_fc/export_test_images_pgm.py`.
+- Đã thêm GUI MVP `firmware/tflm_mnist_uart_gui.py` bằng PySide6 + pyqtgraph,
+  tái sử dụng `mnist_uart_protocol.py` cho frame UART, đọc PGM, quantize và
+  parse response. GUI hiện hỗ trợ chọn port/baud, ping, danh sách sample,
+  preview, chạy một sample được chọn hoặc toàn bộ sample đã load theo batch
+  tuần tự, bảng kết quả từng sample, tổng hợp pass/label/cycles/speedup, biểu
+  đồ score ref/opt, true-label match, expected-artifact match và UART log.
 
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
@@ -173,6 +179,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | MNIST FC TFLM reference board run | ✅ board-pass | ref-only UART checksum `0x00cb95fc`, expected-class `32/32`, score mismatches `0`, cycles `11171144` |
 | MNIST FC ref-vs-opt firmware | ✅ board-pass | `firmware/tflm_mnist_fc.cc`; validated ref `11172961` cycles, opt `901789` cycles, speedup `12.39x`; inference-only ref `10817077`, opt `874897`, speedup `12.36x`; checksum `0x00cb95fc`, score mismatches `0`, firmware `dec=121732`, `.sof` checksum `0x022DD42A` |
 | MNIST FC UART runtime-input firmware/runner | ✅ board-pass | `firmware/tflm_mnist_uart.cc`, `firmware/tflm_mnist_uart_runner.py`, `firmware/mnist_uart_protocol.py`; 32 fixed vectors pass, image mode `--images-dir --limit 10` pass `10/10`, label matches `10/10`, speedup `12.52x` |
+| MNIST UART PySide6 GUI MVP | ✅ smoke-tested | `firmware/tflm_mnist_uart_gui.py`, `firmware/gui_requirements.txt`; chọn port/baud, ping, preview, score bars, log UART; chạy selected sample hoặc toàn bộ loaded samples theo batch, có bảng và summary tổng hợp |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |

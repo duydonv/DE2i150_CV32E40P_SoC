@@ -78,8 +78,14 @@ def format_sample_result(ok: bool, sample: MnistSample, result: dict[str, object
     status = "PASS" if ok else "FAIL"
     if sample.expected_scores is not None:
         expected = sample.expected_class if sample.expected_class is not None else "?"
+        label_match = result.get("label_match")
+        label_status = "unknown"
+        if sample.label is not None:
+            label_status = "yes" if label_match else "no"
+        expected_match = "yes" if result.get("expected_match") else "no"
         return (
             f"{status} {sample.name} label={sample.label} expected={expected} "
+            f"expected_match={expected_match} label_match={label_status} "
             f"{result.get('line', '')}"
         )
 
@@ -117,6 +123,11 @@ def print_summary(results: list[dict[str, object]], failures: int) -> None:
     if labeled:
         label_matches = sum(1 for result in labeled if result.get("label_match") is True)
         print(f"label matches: {label_matches}/{len(labeled)}")
+
+    expected = [result for result in results if result.get("expected_class") is not None]
+    if expected:
+        expected_matches = sum(1 for result in expected if result.get("expected_match") is True)
+        print(f"expected-class matches: {expected_matches}/{len(expected)}")
 
 
 def main() -> None:
@@ -159,7 +170,7 @@ def main() -> None:
     parser.add_argument(
         "--require-label-match",
         action="store_true",
-        help="treat image-mode model misclassification as a runner failure",
+        help="treat true-label misclassification as a runner failure",
     )
     parser.add_argument("--jsonl", action="store_true", help="print parsed results as JSON lines")
     args = parser.parse_args()
@@ -186,7 +197,7 @@ def main() -> None:
             ok, result = validate_infer_response(
                 line,
                 sample,
-                require_label_match=image_mode and args.require_label_match,
+                require_label_match=args.require_label_match,
             )
             results.append(result)
             if args.jsonl:
