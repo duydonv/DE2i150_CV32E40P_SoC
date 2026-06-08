@@ -39,6 +39,9 @@ firmware/mnist_fc/test_images_pgm/
 # Generated third-party source trees
 third_party/tflm_tree/
 
+# Local Python environments
+.venv_gui/
+
 # Editor/OS noise
 .DS_Store
 Thumbs.db
