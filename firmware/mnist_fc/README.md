@@ -100,6 +100,10 @@ For visual testing, run the PySide6 GUI from the SoC repo root:
 .venv_gui/bin/python firmware/tflm_mnist_uart_gui.py
 ```
 
+The GUI can run the selected sample or all loaded samples in one batch. Batch
+mode keeps the UART protocol sequential, then reports a per-sample table plus
+aggregate pass/label/cycle/speedup summary.
+
 The GUI distinguishes true-label matching from expected-artifact matching. For
 the fixed-vector set, `expected_class` is the class predicted by the reference
 TFLM artifact; one vector has true label `5` but expected class `6`, so the

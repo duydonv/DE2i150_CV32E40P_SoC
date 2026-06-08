@@ -39,8 +39,8 @@ Current status as of 2026-06-08:
   `int8 = pixel - 128` on the host. The latest image-mode board run with
   `--images-dir --limit 10` passes `10/10`, label matches `10/10`, and shows
   `12.52x` aggregate speedup. A PySide6 GUI now reuses the same host protocol
-  helpers for port selection, ping, preview, score bars, and one selected
-  sample inference at a time.
+  helpers for port selection, ping, preview, score bars, selected-sample
+  inference, all-loaded-sample batch runs, and aggregate summaries.
 - Questa RTL simulation now generates per-kernel VCD files for Quartus Power
   Analyzer; see `sim/README.md`.
 - The sister gem5 prototype has been semantically aligned to this board
@@ -436,10 +436,12 @@ For example, a three-instruction loop body uses raw immediate `4`. The
   ignored by git and can be recreated with
   `firmware/mnist_fc/export_test_images_pgm.py`.
 - `firmware/tflm_mnist_uart_gui.py` is the current visual test client. It
-  reuses the same protocol helpers as the terminal runner and currently runs
-  one selected fixed vector or PGM image per button press, with preview,
-  ref/opt class scores, cycle/speedup fields, true-label match, expected
-  artifact match, and raw UART log.
+  reuses the same protocol helpers as the terminal runner and can run either
+  the currently selected fixed vector/PGM image or all loaded samples in one
+  batch. The batch path still sends one UART request at a time and reports a
+  progress bar, per-sample table, aggregate pass/label counts, cycle summary,
+  speedup, preview, ref/opt class scores, true-label match, expected artifact
+  match, and raw UART log.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status

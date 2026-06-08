@@ -541,8 +541,11 @@ label matches `10/10`, ref cycles `350615..350622`, opt cycles
 The first GUI wrapper for the same protocol is `tflm_mnist_uart_gui.py`. It is
 a PySide6 + pyqtgraph frontend that reuses `mnist_uart_protocol.py` for serial
 frames, PGM loading, quantization, and response parsing. It provides port/baud
-selection, ping, sample list, image preview, one-sample inference, score bars,
-timing fields, and a raw UART log.
+selection, ping, sample list, image preview, selected-sample inference,
+all-loaded-sample batch runs, score bars, timing fields, a per-sample result
+table, aggregate pass/label/cycle/speedup summary, and a raw UART log. Batch
+runs are sequential at the UART protocol level: the host sends one frame and
+waits for one response before sending the next frame.
 
 Set up and run:
 

@@ -257,8 +257,11 @@ python3 -m venv .venv_gui
 ```
 
 The GUI currently supports port/baud selection, ping, PGM/fixed-vector sample
-selection, preview, one-sample inference, ref/opt score bars, cycle/speedup
-fields, and raw UART response logging. It reports both true-label matches and
+selection, preview, selected-sample inference, all-loaded-sample batch runs,
+ref/opt score bars, cycle/speedup fields, a per-sample result table, aggregate
+pass/label/cycle/speedup summary, and raw UART response logging. Batch runs
+still send one frame and wait for one response at a time, matching the board
+firmware protocol. The GUI reports both true-label matches and
 expected-artifact matches. For the 32 fixed vectors, the expected artifact is
 the TFLM reference output captured during model generation; one fixed vector
 has true label `5` but expected class `6`, so it is an expected-match pass but
