@@ -26,9 +26,27 @@ from mnist_uart_protocol import (
 )
 
 
+INTER_FRAME_DELAY_S = 0.03
+RESULT_COLUMNS = (
+    "#",
+    "Sample",
+    "Label",
+    "Ref",
+    "Opt",
+    "Host",
+    "True",
+    "Expected",
+    "Ref cyc",
+    "Opt cyc",
+    "Speedup",
+)
+
+
 class SerialTask(QtCore.QThread):
     ping_done = QtCore.Signal(str)
     infer_done = QtCore.Signal(object, str, bool, object)
+    progress = QtCore.Signal(int, int)
+    batch_done = QtCore.Signal(object)
     failed = QtCore.Signal(str)
 
     def __init__(
@@ -39,6 +57,7 @@ class SerialTask(QtCore.QThread):
         baud: int,
         timeout_s: float,
         sample: MnistSample | None = None,
+        samples: list[MnistSample] | None = None,
         require_label_match: bool = False,
         parent: QtCore.QObject | None = None,
     ) -> None:
@@ -47,7 +66,12 @@ class SerialTask(QtCore.QThread):
         self.port = port
         self.baud = baud
         self.timeout_s = timeout_s
-        self.sample = sample
+        if samples is not None:
+            self.samples = list(samples)
+        elif sample is not None:
+            self.samples = [sample]
+        else:
+            self.samples = []
         self.require_label_match = require_label_match
 
     def run(self) -> None:
@@ -60,15 +84,31 @@ class SerialTask(QtCore.QThread):
                     self.ping_done.emit(line)
                     return
 
-                if self.sample is None:
+                if not self.samples:
                     raise ValueError("no sample selected")
-                line = send_frame(ser, CMD_INFER, self.sample.payload, self.timeout_s)
-                ok, result = validate_infer_response(
-                    line,
-                    self.sample,
-                    require_label_match=self.require_label_match,
-                )
-                self.infer_done.emit(self.sample, line, ok, result)
+
+                records: list[dict[str, object]] = []
+                total = len(self.samples)
+                for index, sample in enumerate(self.samples, start=1):
+                    line = send_frame(ser, CMD_INFER, sample.payload, self.timeout_s)
+                    ok, result = validate_infer_response(
+                        line,
+                        sample,
+                        require_label_match=self.require_label_match,
+                    )
+                    records.append(
+                        {
+                            "sample": sample,
+                            "line": line,
+                            "ok": ok,
+                            "result": result,
+                        }
+                    )
+                    self.infer_done.emit(sample, line, ok, result)
+                    self.progress.emit(index, total)
+                    if index != total:
+                        time.sleep(INTER_FRAME_DELAY_S)
+                self.batch_done.emit(records)
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -83,7 +123,7 @@ class ScorePlot(pg.PlotWidget):
         self.getPlotItem().setMenuEnabled(False)
         self.getPlotItem().setMouseEnabled(x=False, y=False)
         self.getAxis("bottom").setTicks([[(i, str(i)) for i in range(10)]])
-        self.setYRange(-128, 127)
+        self.setYRange(-32, 96)
 
     def set_scores(self, ref_scores: tuple[int, ...], opt_scores: tuple[int, ...]) -> None:
         self.clear()
@@ -111,9 +151,18 @@ class ScorePlot(pg.PlotWidget):
                 pen=pg.mkPen("#ea580c"),
             )
         )
-        lower = min(-128, min(ref), min(opt)) - 5
-        upper = max(127, max(ref), max(opt)) + 5
-        self.setYRange(lower, upper)
+        values = ref + opt + [0]
+        lower = min(values)
+        upper = max(values)
+        span = max(upper - lower, 1)
+        margin = max(8, int(span * 0.12))
+        lower = max(-128, lower - margin)
+        upper = min(127, upper + margin)
+        if upper - lower < 48:
+            extra = (48 - (upper - lower)) // 2
+            lower = max(-128, lower - extra)
+            upper = min(127, upper + extra)
+        self.setYRange(lower, upper, padding=0)
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -123,6 +172,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.resize(1180, 760)
 
         self.samples: list[MnistSample] = []
+        self.batch_records: list[dict[str, object]] = []
         self.worker: SerialTask | None = None
 
         central = QtWidgets.QWidget()
@@ -173,18 +223,18 @@ class MainWindow(QtWidgets.QMainWindow):
         input_group = QtWidgets.QGroupBox("Input Set")
         input_layout = QtWidgets.QVBoxLayout(input_group)
         button_row = QtWidgets.QHBoxLayout()
-        load_dir_btn = QtWidgets.QPushButton("Default Dir")
-        browse_dir_btn = QtWidgets.QPushButton("Browse Dir")
-        browse_img_btn = QtWidgets.QPushButton("Add Image")
-        fixed_btn = QtWidgets.QPushButton("Fixed Vectors")
-        load_dir_btn.clicked.connect(lambda: self.load_image_dir(DEFAULT_IMAGE_DIR))
-        browse_dir_btn.clicked.connect(self.browse_image_dir)
-        browse_img_btn.clicked.connect(self.browse_image)
-        fixed_btn.clicked.connect(self.load_fixed_vectors)
-        button_row.addWidget(load_dir_btn)
-        button_row.addWidget(browse_dir_btn)
-        button_row.addWidget(browse_img_btn)
-        button_row.addWidget(fixed_btn)
+        self.load_dir_btn = QtWidgets.QPushButton("Default Dir")
+        self.browse_dir_btn = QtWidgets.QPushButton("Browse Dir")
+        self.browse_img_btn = QtWidgets.QPushButton("Add Image")
+        self.fixed_btn = QtWidgets.QPushButton("Fixed Vectors")
+        self.load_dir_btn.clicked.connect(lambda: self.load_image_dir(DEFAULT_IMAGE_DIR))
+        self.browse_dir_btn.clicked.connect(self.browse_image_dir)
+        self.browse_img_btn.clicked.connect(self.browse_image)
+        self.fixed_btn.clicked.connect(self.load_fixed_vectors)
+        button_row.addWidget(self.load_dir_btn)
+        button_row.addWidget(self.browse_dir_btn)
+        button_row.addWidget(self.browse_img_btn)
+        button_row.addWidget(self.fixed_btn)
 
         self.sample_list = QtWidgets.QListWidget()
         self.sample_list.currentRowChanged.connect(self.update_selected_sample)
@@ -198,9 +248,18 @@ class MainWindow(QtWidgets.QMainWindow):
         run_layout = QtWidgets.QVBoxLayout(run_group)
         self.require_label_check = QtWidgets.QCheckBox("Require true label match")
         self.run_btn = QtWidgets.QPushButton("Run Selected")
+        self.run_all_btn = QtWidgets.QPushButton("Run All")
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
         self.run_btn.clicked.connect(self.run_selected)
+        self.run_all_btn.clicked.connect(self.run_all)
+        run_buttons = QtWidgets.QHBoxLayout()
+        run_buttons.addWidget(self.run_btn)
+        run_buttons.addWidget(self.run_all_btn)
         run_layout.addWidget(self.require_label_check)
-        run_layout.addWidget(self.run_btn)
+        run_layout.addLayout(run_buttons)
+        run_layout.addWidget(self.progress_bar)
 
         layout.addWidget(serial_group)
         layout.addWidget(input_group, 1)
@@ -248,23 +307,46 @@ class MainWindow(QtWidgets.QMainWindow):
         top.addWidget(preview_group, 0)
         top.addWidget(result_group, 1)
 
-        plot_group = QtWidgets.QGroupBox("Class Scores")
-        plot_layout = QtWidgets.QVBoxLayout(plot_group)
+        self.plot_group = QtWidgets.QGroupBox("Class Scores")
+        self.plot_group.setMinimumHeight(205)
+        plot_layout = QtWidgets.QVBoxLayout(self.plot_group)
         legend = QtWidgets.QLabel("Blue: TFLM reference    Orange: PULP optimized")
         self.score_plot = ScorePlot()
+        self.score_plot.setMinimumHeight(150)
         plot_layout.addWidget(legend)
         plot_layout.addWidget(self.score_plot, 1)
 
-        log_group = QtWidgets.QGroupBox("UART Log")
-        log_layout = QtWidgets.QVBoxLayout(log_group)
+        self.summary_group = QtWidgets.QGroupBox("Batch Summary")
+        self.summary_group.setMaximumHeight(205)
+        summary_layout = QtWidgets.QVBoxLayout(self.summary_group)
+        summary_layout.setContentsMargins(10, 8, 10, 8)
+        summary_layout.setSpacing(6)
+        self.summary_label = QtWidgets.QLabel("No batch run")
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setMaximumHeight(48)
+        self.result_table = QtWidgets.QTableWidget(0, len(RESULT_COLUMNS))
+        self.result_table.setHorizontalHeaderLabels(RESULT_COLUMNS)
+        self.result_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.result_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
+        self.result_table.setAlternatingRowColors(True)
+        self.result_table.verticalHeader().setVisible(False)
+        self.result_table.horizontalHeader().setStretchLastSection(True)
+        self.result_table.setMinimumHeight(95)
+        self.result_table.setMaximumHeight(135)
+        summary_layout.addWidget(self.summary_label)
+        summary_layout.addWidget(self.result_table, 1)
+
+        self.log_group = QtWidgets.QGroupBox("UART Log")
+        log_layout = QtWidgets.QVBoxLayout(self.log_group)
         self.log_text = QtWidgets.QPlainTextEdit()
         self.log_text.setReadOnly(True)
         self.log_text.setMaximumBlockCount(500)
         log_layout.addWidget(self.log_text)
 
         layout.addLayout(top)
-        layout.addWidget(plot_group, 1)
-        layout.addWidget(log_group, 1)
+        layout.addWidget(self.plot_group, 3)
+        layout.addWidget(self.summary_group, 0)
+        layout.addWidget(self.log_group, 1)
         return panel
 
     def refresh_ports(self) -> None:
@@ -293,6 +375,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def set_busy(self, busy: bool) -> None:
         self.ping_btn.setEnabled(not busy)
         self.run_btn.setEnabled(not busy)
+        self.run_all_btn.setEnabled(not busy)
+        self.load_dir_btn.setEnabled(not busy)
+        self.browse_dir_btn.setEnabled(not busy)
+        self.browse_img_btn.setEnabled(not busy)
+        self.fixed_btn.setEnabled(not busy)
         self.sample_list.setEnabled(not busy)
 
     def append_log(self, text: str) -> None:
@@ -344,6 +431,7 @@ class MainWindow(QtWidgets.QMainWindow):
             label = "?" if sample.label is None else str(sample.label)
             self.sample_list.addItem(f"{sample.name}    label={label}")
         self.sample_count_label.setText(f"{len(self.samples)} sample(s)")
+        self.clear_batch_report()
         self.append_log(message)
         if self.samples:
             self.sample_list.setCurrentRow(0)
@@ -397,11 +485,22 @@ class MainWindow(QtWidgets.QMainWindow):
         if sample is None:
             QtWidgets.QMessageBox.information(self, "Run inference", "Select a sample first.")
             return
-        self.start_worker("infer", sample)
+        self.start_worker("infer", [sample])
 
-    def start_worker(self, task: str, sample: MnistSample | None = None) -> None:
+    def run_all(self) -> None:
+        if not self.samples:
+            QtWidgets.QMessageBox.information(self, "Run inference", "Load samples first.")
+            return
+        self.start_worker("infer", list(self.samples))
+
+    def start_worker(self, task: str, samples: list[MnistSample] | None = None) -> None:
         if self.worker is not None and self.worker.isRunning():
             return
+        if task != "ping":
+            self.prepare_batch_report(len(samples or []))
+        else:
+            self.progress_bar.setRange(0, 1)
+            self.progress_bar.setValue(0)
         self.set_busy(True)
         self.status_label.setText("Running")
         self.status_label.setStyleSheet("")
@@ -410,11 +509,13 @@ class MainWindow(QtWidgets.QMainWindow):
             port=self.current_port(),
             baud=self.baud_spin.value(),
             timeout_s=self.timeout_spin.value(),
-            sample=sample,
+            samples=samples,
             require_label_match=self.require_label_check.isChecked(),
         )
         self.worker.ping_done.connect(self.on_ping_done)
         self.worker.infer_done.connect(self.on_infer_done)
+        self.worker.progress.connect(self.on_progress)
+        self.worker.batch_done.connect(self.on_batch_done)
         self.worker.failed.connect(self.on_worker_failed)
         self.worker.finished.connect(lambda: self.set_busy(False))
         self.worker.start()
@@ -456,6 +557,26 @@ class MainWindow(QtWidgets.QMainWindow):
         opt_scores = result.get("opt_scores")
         if isinstance(ref_scores, tuple) and isinstance(opt_scores, tuple):
             self.score_plot.set_scores(ref_scores, opt_scores)
+        self.append_result_row(sample, ok, result)
+
+    def on_progress(self, done: int, total: int) -> None:
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(done)
+        self.summary_label.setText(f"Running {done}/{total} sample(s)")
+
+    def on_batch_done(self, records: list[dict[str, object]]) -> None:
+        self.batch_records = records
+        self.summary_label.setText(self.format_batch_summary(records))
+        passed = sum(1 for record in records if record.get("ok") is True)
+        all_passed = bool(records) and passed == len(records)
+        if len(records) == 1:
+            text = "PASS" if all_passed else "FAIL"
+        else:
+            text = "Batch PASS" if all_passed else "Batch FAIL"
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(
+            "color:#15803d; font-weight:600;" if all_passed else "color:#b91c1c; font-weight:600;"
+        )
 
     def format_label_match(self, sample: MnistSample, result: dict[str, object]) -> str:
         if sample.label is None:
@@ -466,6 +587,93 @@ class MainWindow(QtWidgets.QMainWindow):
         if sample.expected_class is None:
             return "n/a"
         return "yes" if result.get("expected_match") is True else "no"
+
+    def prepare_batch_report(self, total: int) -> None:
+        self.batch_records = []
+        self.result_table.setRowCount(0)
+        self.summary_label.setText(f"Ready to run {total} sample(s)")
+        self.progress_bar.setRange(0, max(total, 1))
+        self.progress_bar.setValue(0)
+
+    def clear_batch_report(self) -> None:
+        self.batch_records = []
+        self.result_table.setRowCount(0)
+        self.summary_label.setText("No batch run")
+        self.progress_bar.setRange(0, 1)
+        self.progress_bar.setValue(0)
+
+    def append_result_row(
+        self,
+        sample: MnistSample,
+        ok: bool,
+        result: dict[str, object],
+    ) -> None:
+        row = self.result_table.rowCount()
+        self.result_table.insertRow(row)
+
+        ref_cycles = int(result.get("ref_cycles", 0) or 0)
+        opt_cycles = int(result.get("opt_cycles", 0) or 0)
+        speedup = f"{ref_cycles / opt_cycles:.2f}x" if opt_cycles else "-"
+        values = (
+            str(row + 1),
+            sample.name,
+            "?" if sample.label is None else str(sample.label),
+            str(result.get("ref_cls", "-")),
+            str(result.get("opt_cls", "-")),
+            "PASS" if ok else "FAIL",
+            self.format_label_match(sample, result),
+            self.format_expected_match(sample, result),
+            str(ref_cycles) if ref_cycles else "-",
+            str(opt_cycles) if opt_cycles else "-",
+            speedup,
+        )
+        for column, value in enumerate(values):
+            item = QtWidgets.QTableWidgetItem(value)
+            if column == 5:
+                item.setForeground(QtGui.QBrush(QtGui.QColor("#15803d" if ok else "#b91c1c")))
+            self.result_table.setItem(row, column, item)
+        self.result_table.resizeColumnsToContents()
+        self.result_table.scrollToBottom()
+
+    def format_batch_summary(self, records: list[dict[str, object]]) -> str:
+        if not records:
+            return "No batch run"
+
+        total = len(records)
+        passed = sum(1 for record in records if record.get("ok") is True)
+        results = [
+            record["result"]
+            for record in records
+            if isinstance(record.get("result"), dict)
+        ]
+        labeled = [result for result in results if result.get("label") is not None]
+        label_matches = sum(1 for result in labeled if result.get("label_match") is True)
+        expected = [result for result in results if result.get("expected_class") is not None]
+        expected_matches = sum(1 for result in expected if result.get("expected_match") is True)
+        score_mismatches = sum(int(result.get("mismatches", 0) or 0) for result in results)
+        ref_cycles = [int(result["ref_cycles"]) for result in results if "ref_cycles" in result]
+        opt_cycles = [int(result["opt_cycles"]) for result in results if "opt_cycles" in result]
+
+        label_text = f"{label_matches}/{len(labeled)}" if labeled else "n/a"
+        expected_text = f"{expected_matches}/{len(expected)}" if expected else "n/a"
+        lines = [
+            f"Host pass: {passed}/{total}",
+            f"True-label match: {label_text}",
+            f"Expected-artifact match: {expected_text}",
+            f"Score mismatches: {score_mismatches}",
+        ]
+
+        if ref_cycles and opt_cycles and sum(opt_cycles) != 0:
+            lines.extend(
+                [
+                    "Ref cycles min/avg/max: "
+                    f"{min(ref_cycles)}/{sum(ref_cycles) // len(ref_cycles)}/{max(ref_cycles)}",
+                    "Opt cycles min/avg/max: "
+                    f"{min(opt_cycles)}/{sum(opt_cycles) // len(opt_cycles)}/{max(opt_cycles)}",
+                    f"Aggregate speedup: {sum(ref_cycles) / sum(opt_cycles):.2f}x",
+                ]
+            )
+        return "    ".join(lines)
 
     def on_worker_failed(self, message: str) -> None:
         self.status_label.setText("Error")
