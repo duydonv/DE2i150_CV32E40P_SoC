@@ -187,3 +187,70 @@ LED status while running `tflm_tiny_uart`:
 
 After a successful runner pass, the firmware returns to `0x82` because it is
 idle and waiting for another frame.
+
+## TFLM MNIST UART Commands
+
+`tflm_mnist_uart` reuses the same envelope for the larger MNIST FC model:
+
+```text
+784 int8 inputs -> FullyConnected 32 + ReLU -> FullyConnected 10 outputs
+```
+
+Commands:
+
+| Command | Payload | Meaning |
+|---:|---|---|
+| `0x10` | 0 bytes | ping |
+| `0x11` | 784 bytes | run one already-quantized MNIST input tensor |
+
+Build and test:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+make tflm_mnist_uart CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+cd ..
+/home/duydonv/altera_lite/25.1std/quartus/bin/quartus_sh --flow compile de2i150_cv32e40p_top
+```
+
+After programming the `.sof`:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+python3 tflm_mnist_uart_runner.py /dev/ttyUSB0
+```
+
+The runner sends the 32 fixed vectors from
+`firmware/mnist_fc/mnist_fc_test_vectors.h` over UART and checks the board's
+response against the expected class and score bytes. This confirms the UART
+runtime input path before sending arbitrary image files or adding a GUI.
+
+The same runner also supports exported MNIST PGM images:
+
+```bash
+python3 mnist_fc/export_test_images_pgm.py
+python3 tflm_mnist_uart_runner.py /dev/ttyUSB0 --images-dir
+python3 tflm_mnist_uart_runner.py /dev/ttyUSB0 --image mnist_fc/test_images_pgm/mnist_test_00032_label3.pgm
+```
+
+Image mode reads binary PGM/P5 28x28 files, converts each grayscale pixel to
+the model input byte with `int8 = pixel - 128`, and sends the same `0x11`
+784-byte frame. Label matches are reported separately; use
+`--require-label-match` only when a model misclassification should make the
+runner exit with failure.
+
+Current board result for image mode: `--images-dir --limit 10` passes `10/10`
+samples, label matches `10/10`, score mismatches `0`, ref cycles
+`350615..350622`, opt cycles `27999..28014`, and aggregate speedup `12.52x`.
+
+LED status while running `tflm_mnist_uart`:
+
+| LEDR[7:0] | Meaning |
+|---|---|
+| `0x98` | init |
+| `0x99` | TFLM setup |
+| `0x9a` | ready/waiting for the next RX frame |
+| `0x9b` | receiving/checking a frame |
+| `0x9c` | running TFLM reference inference |
+| `0x9d` | running optimized inference |
+| `0xa5` | last handled frame passed |
+| `0xef` | last handled frame failed, or setup failed |

@@ -33,10 +33,15 @@ firmware/*.o
 firmware/*.d
 firmware/build/
 
+# Reproducible MNIST test image exports
+firmware/mnist_fc/test_images_pgm/
+
 # Generated third-party source trees
 third_party/tflm_tree/
 
 # Editor/OS noise
 .DS_Store
 Thumbs.db
+__pycache__/
+*.pyc
 *~

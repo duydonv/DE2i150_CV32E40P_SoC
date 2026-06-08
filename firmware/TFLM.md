@@ -80,7 +80,11 @@ The board-specific TFLM integration files are committed to this repository:
 - `firmware/mnist_fc/`: host-trained MNIST `784 -> 32 -> 10` full-INT8 TFLite
   artifacts for the next firmware milestone. It includes the reproducible
   TensorFlow train/quantize/verify script, `.tflite`, C byte array, metadata,
-  and fixed test vectors.
+  fixed test vectors, and the PGM image export script.
+- `firmware/tflm_mnist_uart.cc`: MNIST FC request/response UART runtime-input
+  firmware.
+- `firmware/tflm_mnist_uart_runner.py` and `firmware/mnist_uart_protocol.py`:
+  reusable host UART protocol, fixed-vector, and PGM image-mode runner code.
 - `firmware/tflm_port.cc`: target hooks for logging/time/setup.
 - `firmware/tflm_kernel_util_shim.cc`: small compatibility shim needed by the
   generated tree used here.
@@ -95,6 +99,7 @@ The following are intentionally not committed:
 - The original upstream TFLM clone. It is only needed when regenerating or
   updating `third_party/tflm_tree`.
 - The generated TFLM tree `third_party/tflm_tree`.
+- Generated MNIST PGM images under `firmware/mnist_fc/test_images_pgm`.
 - Download archives and temporary generated trees.
 
 For normal rebuilds of the current `tflm_hello` milestone, the repo plus a
@@ -480,6 +485,58 @@ Build:
 cd /home/duydonv/de2i150_cv32e40p_soc/firmware
 make tflm_mnist_fc CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
 ```
+
+Runtime UART input uses the separate target `tflm_mnist_uart`. It keeps the
+same flatbuffer model and optimized FC path, but waits for one framed input at
+a time instead of running the fixed vectors internally. The host payload is the
+already-quantized MNIST input tensor: 784 raw bytes, where each byte is the
+two's-complement representation of the model `int8` value.
+
+```text
+55 aa cmd len_lo len_hi payload checksum_le32
+cmd 0x10: ping, len 0
+cmd 0x11: infer one MNIST vector, len 784
+```
+
+Build:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+make tflm_mnist_uart CROSS=/home/duydonv/tools/xpack-riscv-none-elf-gcc/xpack-riscv-none-elf-gcc-14.2.0-3/bin/riscv-none-elf-
+```
+
+After Quartus compile and programming, verify the UART data path with the 32
+fixed MNIST vectors from `mnist_fc_test_vectors.h`:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+python3 tflm_mnist_uart_runner.py /dev/ttyUSB0
+```
+
+The runner sends one ping and then 32 `0x11` frames. It checks that the board
+returns `pass=yes`, zero ref-vs-opt score mismatches, and the same expected
+class and score vector as the fixed-vector firmware artifacts. This runner is
+also the intended base for a later GUI client.
+
+The same runner can send exported PGM test images. These images are generated
+artifacts and are ignored by git:
+
+```bash
+python3 mnist_fc/export_test_images_pgm.py
+python3 tflm_mnist_uart_runner.py /dev/ttyUSB0 --images-dir
+python3 tflm_mnist_uart_runner.py /dev/ttyUSB0 --image mnist_fc/test_images_pgm/mnist_test_00032_label3.pgm
+```
+
+In image mode, the host converts each 28x28 grayscale pixel to the model input
+byte with `int8 = pixel - 128`. By default, image-mode pass/fail checks the
+UART path and ref-vs-opt equality; it reports label matches separately because
+the model can legitimately misclassify some MNIST test images. Add
+`--require-label-match` when a label mismatch should fail the run.
+
+Current MNIST UART image-mode board result: the first 10 generated PGM images
+from MNIST test indices `32..41` pass with ref-vs-opt score mismatches `0`,
+label matches `10/10`, ref cycles `350615..350622`, opt cycles
+`27999..28014`, and aggregate speedup `12.52x`.
 
 Current ref-vs-opt build/full-compile/program/board status:
 

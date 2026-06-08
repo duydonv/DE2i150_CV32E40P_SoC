@@ -71,6 +71,29 @@ capture reports validated-run `tflm_ref` cycles `11172961`, `pulp_opt` cycles
 paths, expected-class matches `32/32`, class mismatches `0`, score mismatches
 `0`, and `Overall pass: yes`.
 
+Runtime UART input status: `tflm_mnist_uart` uses the same model and optimized
+kernel, but receives one quantized 784-byte input tensor per frame. The host
+script `../tflm_mnist_uart_runner.py` sends these 32 vectors over UART and
+checks the response against `mnist_fc_test_vectors.h`. This is the terminal
+test path before adding arbitrary image input or a GUI.
+
+For image-mode UART testing, generated PGM images can be placed under
+`test_images_pgm/`. That directory is ignored by git because it is reproducible
+from the MNIST test split. The UART runner can send either one image with
+`--image` or all generated images with `--images-dir`, converting each pixel
+with `int8 = pixel - 128`.
+
+Regenerate the default test image set with:
+
+```bash
+cd /home/duydonv/de2i150_cv32e40p_soc/firmware
+python3 mnist_fc/export_test_images_pgm.py
+```
+
+Current image-mode UART board result: `--images-dir --limit 10` passes `10/10`
+generated PGM samples from test indices `32..41`, label matches `10/10`, and
+the aggregate speedup is `12.52x`.
+
 ## Files
 
 | File | Meaning |
@@ -81,3 +104,4 @@ paths, expected-class matches `32/32`, class mismatches `0`, score mismatches
 | `mnist_fc_model_data.{cc,h}` | C byte array wrapping the `.tflite` model |
 | `mnist_fc_test_vectors.h` | First 32 quantized MNIST test samples and expected INT8 outputs |
 | `mnist_fc_metadata.json` | Accuracy, checksum, quantization, and training metadata |
+| `export_test_images_pgm.py` | Recreate ignored PGM test images for UART image-mode testing |
