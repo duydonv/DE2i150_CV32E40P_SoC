@@ -129,6 +129,15 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
   `Overall pass: yes`. Firmware cũng in thêm inference-only timing: ref
   `10817077` cycles, opt `874897` cycles, speedup `12.36x`. Clamp vẫn giữ
   scalar signed TFLite-compatible path, chưa map sang `cv.clipur`.
+- Đã thêm `tflm_mnist_uart` để gửi input runtime cho MNIST FC qua cùng frame
+  UART `55 aa cmd len_lo len_hi payload checksum_le32`. Host runner mặc định
+  vẫn gửi 32 fixed vectors, đồng thời hỗ trợ `--image` và `--images-dir` với
+  ảnh PGM 28x28 được convert trên host bằng `int8 = pixel - 128`. Board test
+  mới nhất với `--images-dir --limit 10` pass `10/10`, label matches `10/10`,
+  score mismatches `0`, ref cycles `350615..350622`, opt cycles
+  `27999..28014`, aggregate speedup `12.52x`. Ảnh PGM export nằm dưới
+  `firmware/mnist_fc/test_images_pgm/` và bị ignore; tái tạo bằng
+  `firmware/mnist_fc/export_test_images_pgm.py`.
 
 ## 2. Trạng thái hiện tại — đã hoàn thành
 
@@ -163,6 +172,7 @@ Gem5 repo liên quan: `/home/duydonv/gem5/tests/gem5/riscv_ai_ext`.
 | MNIST FC `784->32->10` INT8 host artifacts | ✅ host-verified | `firmware/mnist_fc/`; INT8 `.tflite` accuracy `96.28%`, model `28368` B, checksum `0x7c33a8dc` |
 | MNIST FC TFLM reference board run | ✅ board-pass | ref-only UART checksum `0x00cb95fc`, expected-class `32/32`, score mismatches `0`, cycles `11171144` |
 | MNIST FC ref-vs-opt firmware | ✅ board-pass | `firmware/tflm_mnist_fc.cc`; validated ref `11172961` cycles, opt `901789` cycles, speedup `12.39x`; inference-only ref `10817077`, opt `874897`, speedup `12.36x`; checksum `0x00cb95fc`, score mismatches `0`, firmware `dec=121732`, `.sof` checksum `0x022DD42A` |
+| MNIST FC UART runtime-input firmware/runner | ✅ board-pass | `firmware/tflm_mnist_uart.cc`, `firmware/tflm_mnist_uart_runner.py`, `firmware/mnist_uart_protocol.py`; 32 fixed vectors pass, image mode `--images-dir --limit 10` pass `10/10`, label matches `10/10`, speedup `12.52x` |
 | `FPGA_TIMING_MODE=1` để đóng timing 50 MHz | ✅ | `rtl/core/*`, Quartus STA |
 | Splitter `firmware.bin` → 4 byte-lane hex | ✅ | `firmware/split_hex.py` |
 | 8 patch SV-2012→SV-2005 cho Quartus Lite | ✅ | `fpga_patches/README.md` |

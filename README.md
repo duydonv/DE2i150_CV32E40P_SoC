@@ -12,7 +12,7 @@ modes. These map the earlier gem5 AI-extension prototype onto the CORE-V
 instructions already present in CV32E40P: `cv.mac`, `cv.sdotsp.b`, `cv.max`,
 `cv.clipur`, `cv.lw` post-increment, and `cv.setup`.
 
-Current status as of 2026-06-07:
+Current status as of 2026-06-08:
 
 - `COREV_PULP=1`, `FPU=0`, `COREV_CLUSTER=0`.
 - `FPGA_TIMING_MODE=1` is enabled in the local core copy to close 50 MHz
@@ -33,6 +33,12 @@ Current status as of 2026-06-07:
   per-channel requantization. The latest board run passes with `12.39x`
   validated speedup and `12.36x` inference-only speedup over TFLM reference on
   32 fixed MNIST vectors.
+- `tflm_mnist_uart` now streams MNIST FC runtime inputs over UART. The runner
+  reuses the fixed 32 vectors by default and also supports PGM image input via
+  `--image`/`--images-dir`. Image mode converts each 28x28 grayscale pixel to
+  `int8 = pixel - 128` on the host. The latest image-mode board run with
+  `--images-dir --limit 10` passes `10/10`, label matches `10/10`, and shows
+  `12.52x` aggregate speedup.
 - Questa RTL simulation now generates per-kernel VCD files for Quartus Power
   Analyzer; see `sim/README.md`.
 - The sister gem5 prototype has been semantically aligned to this board
@@ -421,6 +427,12 @@ For example, a three-instruction loop body uses raw immediate `4`. The
   keeps scalar signed TFLite-compatible clamp/requantization; `cv.clipur`
   remains a follow-up after deciding whether to keep signed INT8 or regenerate
   an unsigned quantized model.
+- With `tflm_mnist_uart` firmware, **UART RX** accepts one framed 784-byte
+  quantized MNIST input tensor at a time. The host runner can send the fixed
+  vector set, one generated PGM image, or all images under
+  `firmware/mnist_fc/test_images_pgm/`. The generated image directory is
+  ignored by git and can be recreated with
+  `firmware/mnist_fc/export_test_images_pgm.py`.
 - **LEDR[17:8]** stay dark to keep the board display readable.
 
 ## Current PULP synthesis status
